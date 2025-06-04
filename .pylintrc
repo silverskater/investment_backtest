@@ -1,0 +1,23 @@
+[MASTER]
+disable=
+    C0103, # Invalid name
+    C0111, # Missing docstring
+    R0913, # Too many arguments
+    R0914, # Too many local variables
+
+[FORMAT]
+max-line-length=88
+indent-string='    '
+
+[SIMILARITIES]
+min-similarity-lines=7
+ignore-comments=yes
+ignore-docstrings=yes
+ignore-imports=yes
+
+[DESIGN]
+max-attributes=12
+max-args=8
+
+[MESSAGES CONTROL]
+disable=fixme,line-too-long
