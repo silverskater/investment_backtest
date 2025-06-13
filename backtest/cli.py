@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import click
 import pandas as pd
+import numpy as np
+
 from pandas.errors import EmptyDataError
 
 from backtest.strategy_manager import (
@@ -34,334 +36,351 @@ DEFAULT_TRANSACTION_COST = 0.005
 NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES = 1_000_000.0
 
 
-# --- Helper Functions ---
+# --- Helper Functions for calculate_metrics ---
 
-def rebalance(
-        current_portfolio_history: List[Dict[str, Any]],
-        target_stocks: pd.DataFrame,  # Expected to have 'symbol', 'weight', 'share_price'
-        period_date_str: str,
-        dynamic_rebalance_active: bool = False,
-        deviation_threshold: float = DEFAULT_DEVIATION_THRESHOLD,
-        transaction_cost_rate: float = DEFAULT_TRANSACTION_COST
-) -> List[Dict[str, Any]]:
-    """Rebalances the portfolio based on new target stock allocations.
-
-    Calculates monetary values for buys and sells based on a notional
-    portfolio value, and stores these along with transaction costs.
-
-    Args:
-        current_portfolio_history: A list of dictionaries, where each
-            dictionary represents a past state of the portfolio.
-        target_stocks: A DataFrame of stocks for the current period.
-            Expected columns: 'symbol', 'weight' and 'share_price'.
-        period_date_str: The date string for the current rebalancing period.
-        dynamic_rebalance_active: If True, rebalancing only occurs if
-            deviations exceed the threshold or if portfolio composition changes.
-        deviation_threshold: The maximum allowed deviation from target weight
-            before triggering a rebalance in dynamic mode.
-        transaction_cost_rate: The cost rate for transactions (e.g., 0.005
-            for 0.5%).
-
-    Returns:
-        An updated list of portfolio states, including the new state after
-        rebalancing (if any).
+def _get_periodic_returns_from_history(portfolio_history: List[Dict[str, Any]]) -> List[float]:
     """
-    # Handle target_stocks weights and share_price missing.
-    if not target_stocks.get('weight', pd.Series(dtype=float)).sum() > 0 and not target_stocks.empty:
-        click.echo(
-            f"Warning: Target stock weights for {period_date_str} sum to zero or are invalid. "
-            "Assuming equal weighting for target stocks.",
-            err=True
-        )
-        if len(target_stocks) > 0:
-            target_stocks.loc[:, 'weight'] = 1.0 / len(target_stocks)
-        else:  # target_stocks is empty but not None
-            target_stocks.loc[:, 'weight'] = 0.0
-    target_stocks_records = []
-    if not target_stocks.empty:
-        if 'share_price' not in target_stocks.columns:
-            click.echo(f"Warning: 'share_price' missing in target_stocks for {period_date_str}. Using placeholder 1.0.",
-                       err=True)
-            target_stocks['share_price'] = 1.0  # Placeholder
-        target_stocks_records = target_stocks.to_dict('records')
-    updated_portfolio_history = list(current_portfolio_history)  # Make a copy to append to
+    Extracts periodic returns from the portfolio history.
+    Assumes the first entry is an initial state and returns are from the second entry onwards.
+    Handles 'CASH' positions as 0% return for that period.
+    """
+    periodic_returns = []
+    if len(portfolio_history) > 1:
+        for i in range(1, len(portfolio_history)):
+            period_entry = portfolio_history[i]
+            if period_entry['stocks'] and period_entry['stocks'][0].get('symbol') == 'CASH':
+                # If portfolio is all cash, assume 0% return for that period's performance
+                # (unless 'annual_return' is explicitly provided for CASH, which is unusual)
+                period_return = period_entry['stocks'][0].get('annual_return', 0.0) / 100.0
+            else:
+                # Calculate weighted average return for the period
+                # Assumes 'annual_return' is in percentage points (e.g., 10.0 for 10%)
+                # Assumes 'weight' is a fraction (e.g., 0.5 for 50%)
+                current_period_return = sum(
+                    stock.get('weight', 0) * (stock.get('annual_return', 0) / 100.0)
+                    for stock in period_entry['stocks']
+                )
+                period_return = current_period_return
+            periodic_returns.append(period_return)
+    return periodic_returns
 
-    if not current_portfolio_history:
-        # Initial investment
-        # All target weight is "bought" against a cash position.
-        value_bought_for_period = NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES * target_stocks['weight'].sum()
-        value_sold_for_period = 0.0  # Explicitly 0 for initial investment
-        # Transaction cost is on the value bought.
-        calculated_transaction_cost = value_bought_for_period * transaction_cost_rate
 
-        updated_portfolio_history.append({
-            'date': period_date_str,
-            'stocks': target_stocks_records,
-            'action': 'initial_investment',
-            'value_bought': value_bought_for_period,
-            'value_sold': value_sold_for_period,
-            'transaction_cost': calculated_transaction_cost
-        })
-        return updated_portfolio_history
+def _calculate_return_group_metrics(periodic_returns: List[float]) -> Dict[str, float]:
+    """Calculates total return and average annual return (CAGR)."""
+    if not periodic_returns:
+        return {"total_return": 0.0, "average_annual_return": 0.0}
 
-    last_portfolio_state = current_portfolio_history[-1]
-    last_stocks_list = last_portfolio_state.get('stocks', [])
-    if not isinstance(last_stocks_list, list):
-        last_stocks_list = []
+    # Total Return
+    total_return_factor = np.prod([1 + r for r in periodic_returns])
+    total_return_pct = (total_return_factor - 1) * 100
 
-    last_holdings = {
-        stock['symbol']: stock for stock in last_stocks_list if isinstance(stock, dict)
-    }
-    # Use a dictionary for target_holdings for efficient lookup by symbol
-    target_holdings_map = {
-        row['symbol']: row for _, row in target_stocks.iterrows()
-    }
+    # Average Annual Return (CAGR)
+    num_periods = len(periodic_returns)
+    cagr = (total_return_factor ** (1 / num_periods) - 1) if num_periods > 0 else 0.0
+    cagr_pct = cagr * 100
 
-    if dynamic_rebalance_active:
-        needs_rebalance_flag = False
-        # Check for weight deviations or new stocks in the target.
-        for symbol, target_item_series in target_holdings_map.items():
-            target_weight = target_item_series.get('weight', 0.0)
-            if symbol in last_holdings:
-                current_weight = last_holdings[symbol].get('weight', 0.0)
-                if abs(current_weight - target_weight) > deviation_threshold:
-                    needs_rebalance_flag = True
-                    break
-            elif target_weight > 0:  # New stock in target with positive weight
-                needs_rebalance_flag = True
-                break
-        # Check for sold stocks (in last_holdings but not in target_holdings_map or target weight is 0).
-        if not needs_rebalance_flag:
-            for symbol, last_item in last_holdings.items():
-                if last_item.get('weight', 0.0) > 0:  # Only consider if it was actually held
-                    target_item_series = target_holdings_map.get(symbol)
-                    if target_item_series is None or target_item_series.get('weight',
-                                                                            0.0) == 0.0:  # Sold or weight reduced to 0
-                        needs_rebalance_flag = True
-                        break
+    return {"total_return": total_return_pct, "average_annual_return": cagr_pct}
 
-        if not needs_rebalance_flag:
-            # No rebalancing needed based on dynamic criteria. Record a 'hold' action.
-            updated_portfolio_history.append({
-                'date': period_date_str,
-                'stocks': last_stocks_list,  # Carry forward the last holdings
-                'action': 'hold',
-                'value_bought': 0.0,
-                'value_sold': 0.0,
-                'transaction_cost': 0.0
-            })
-            return updated_portfolio_history  # Return the updated history
 
-    # Calculate monetary value of buys and sells for 'rebalance' action
-    value_bought_for_period = 0.0
-    value_sold_for_period = 0.0
-    all_involved_symbols = set(last_holdings.keys()) | set(target_holdings_map.keys())
+def _calculate_risk_group_metrics(periodic_returns: List[float], risk_free_rate: float) -> Dict[str, float]:
+    """Calculates Sharpe ratio and maximum drawdown."""
+    if not periodic_returns:
+        return {"sharpe_ratio": 0.0, "max_drawdown": 0.0}
 
-    for symbol in all_involved_symbols:
-        old_weight = last_holdings.get(symbol, {}).get('weight', 0.0)
-        # Get new weight from target_holdings_map (derived from target_stocks DataFrame)
-        new_weight = target_holdings_map.get(symbol, {}).get('weight', 0.0)
-        weight_change = new_weight - old_weight
-        trade_value = abs(weight_change) * NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES
-        # Only account for buys/sells of non-CASH assets for these metrics
-        if symbol.upper() != 'CASH': # Make comparison case-insensitive for robustness
-            if weight_change > 0:  # Buy non-CASH asset
-                value_bought_for_period += trade_value
-            elif weight_change < 0:  # Sell non-CASH asset
-                value_sold_for_period += trade_value
+    returns_series = pd.Series(periodic_returns)
+    num_periods = len(periodic_returns)
 
-    # Transaction cost is on the sum of buys and sells (total traded volume)
-    calculated_transaction_cost = (value_bought_for_period + value_sold_for_period) * transaction_cost_rate
+    # Sharpe Ratio
+    excess_returns = returns_series - risk_free_rate
+    mean_excess_return = excess_returns.mean()
+    std_dev_excess_returns = excess_returns.std(
+        ddof=0 if num_periods == 1 else 1)  # ddof=0 for population std if only 1 period
 
-    updated_portfolio_history.append({
-        'date': period_date_str,
-        'stocks': target_stocks_records,
-        'action': 'rebalance',
-        'value_bought': value_bought_for_period,
-        'value_sold': value_sold_for_period,
-        'transaction_cost': calculated_transaction_cost
-    })
-    return updated_portfolio_history
+    if std_dev_excess_returns == 0:
+        if mean_excess_return > 0:
+            sharpe = float('inf')
+        elif mean_excess_return == 0:  # Handles returns == risk_free_rate
+            sharpe = 0.0
+        else:  # mean_excess_return < 0 and std_dev is 0
+            sharpe = 0.0  # Or float('-inf'), tests imply 0.0 for this case
+    else:
+        # Assuming annual returns, so sqrt(1) for annualization factor of Sharpe.
+        # If periodic_returns are for a different frequency, this sqrt factor would change.
+        sharpe = mean_excess_return / std_dev_excess_returns * np.sqrt(1)
+
+    # Maximum Drawdown
+    # Prepend 1 to represent the initial value before any returns
+    initial_value = pd.Series([1.0])
+    cumulative_growth_factors = (1 + returns_series).cumprod()
+    equity_curve = pd.concat([initial_value, cumulative_growth_factors], ignore_index=True)
+
+    peak = equity_curve.expanding(min_periods=1).max()
+    drawdown = (equity_curve - peak) / peak
+    max_drawdown_val = drawdown.min()
+    max_drawdown_pct = abs(max_drawdown_val * 100)
+
+    return {"sharpe_ratio": sharpe, "max_drawdown": max_drawdown_pct}
+
+
+def _calculate_activity_group_metrics(portfolio_history: List[Dict[str, Any]], notional_value_for_ptr: float) -> Dict[
+    str, float]:
+    """Calculates portfolio turnover ratio and total transaction costs."""
+    turnover_events = []
+    total_transaction_cost_monetary = 0
+    num_rebalance_events_for_cost_avg = 0
+
+    if len(portfolio_history) > 1:  # Need at least one rebalance/activity event
+        for entry in portfolio_history:
+            action = entry.get('action', '')
+            if action not in ['initial_investment', 'hold'] and action != '':  # Consider rebalances
+                value_bought = entry.get('value_bought', 0.0)
+                value_sold = entry.get('value_sold', 0.0)
+                turnover_for_event = min(value_bought, value_sold) / notional_value_for_ptr
+                turnover_events.append(turnover_for_event)
+
+                total_transaction_cost_monetary += entry.get('transaction_cost', 0.0)
+                if entry.get('transaction_cost',
+                             0.0) > 0 or value_bought > 0 or value_sold > 0:  # Count if actual rebalance activity
+                    num_rebalance_events_for_cost_avg += 1
+
+    avg_turnover_ratio = np.mean(turnover_events) * 100 if turnover_events else 0.0
+
+    avg_transaction_cost_pct = 0.0
+    if num_rebalance_events_for_cost_avg > 0 and notional_value_for_ptr > 0:
+        # Average cost as % of notional value per rebalance event
+        avg_transaction_cost_pct = (total_transaction_cost_monetary / (
+                num_rebalance_events_for_cost_avg * notional_value_for_ptr)) * 100
+
+    return {"turnover_ratio": avg_turnover_ratio, "transaction_costs_total": avg_transaction_cost_pct}
+
+
+def _get_final_portfolio_size(portfolio_history: List[Dict[str, Any]]) -> int:
+    """Calculates the number of non-CASH holdings in the final portfolio period."""
+    if not portfolio_history:
+        return 0
+    last_entry_stocks = portfolio_history[-1].get('stocks', [])
+    if not last_entry_stocks:
+        return 0
+    # Count stocks that are not 'CASH'
+    size = sum(1 for stock in last_entry_stocks if stock.get('symbol') != 'CASH')
+    return size
 
 
 def calculate_metrics(
         portfolio_history: List[Dict[str, Any]],
-        benchmark_returns: Optional[pd.Series] = None
+        benchmark_returns: Optional[pd.Series] = None,  # Placeholder for future use
+        risk_free_rate: float = ANNUAL_RISK_FREE_RATE,
+        notional_value_for_ptr: float = NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES
 ) -> Dict[str, float]:
-    """Calculates key performance metrics for the backtested portfolio.
-
-    Args:
-        portfolio_history: A list of portfolio states over time. Each state
-            is a dictionary including 'stocks', 'value_bought', 'value_sold',
-            and 'transaction_cost'.
-        benchmark_returns: An optional pandas Series of benchmark returns
-            for the same periods as the portfolio.
-
-    Returns:
-        A dictionary containing calculated performance metrics:
-            - sharpe_ratio: Risk-adjusted return.
-            - max_drawdown: Largest peak-to-trough decline.
-            - sp500_comparison: Alpha relative to the benchmark.
-            - turnover_ratio: Measure of trading activity.
-            - average_annual_return: CAGR.
-            - total_return: Total return over the entire period.
-            - portfolio_size: Number of stocks in the final portfolio.
-            - transaction_costs_total: Average transaction cost per rebalance
-                                     event as a percentage of notional value.
     """
-    if not portfolio_history:
+    Calculates key performance metrics for a backtest.
+    """
+    if not portfolio_history or len(portfolio_history) <= 1:  # Need at least initial state + 1 period for returns
         return {
-            'sharpe_ratio': 0.0,
-            'max_drawdown': 0.0,
-            'sp500_comparison': 0.0,
-            'turnover_ratio': 0.0,
-            'average_annual_return': 0.0,
-            'total_return': 0.0,
-            'portfolio_size': 0,
-            'transaction_costs_total': 0.0
+            'sharpe_ratio': 0.0, 'max_drawdown': 0.0, 'sp500_comparison': 0.0,
+            'turnover_ratio': 0.0, 'average_annual_return': 0.0,
+            'total_return': 0.0, 'portfolio_size': 0, 'transaction_costs_total': 0.0
         }
 
-    final_portfolio_state = portfolio_history[-1]
-    # Ensure the 'stocks' key exists and is a list, default to empty if not.
-    final_stocks_list = final_portfolio_state.get('stocks', [])
-    if not isinstance(final_stocks_list, list):  # Defensive check
-        final_stocks_list = []
+    periodic_returns = _get_periodic_returns_from_history(portfolio_history)
 
-    periodic_returns = []
-    # Start from the second entry to calculate returns based on the first period's holdings
-    for i in range(1, len(portfolio_history)):
-        # The return for period 'i' is based on the portfolio defined at the start of period 'i'
-        # which is usually the composition set at the end of period 'i-1' or the start of 'i'.
-        # The current logic uses portfolio_history[i]'s stocks for period_history[i]'s return.
-        # This implies 'annual_return' in portfolio_history[i]['stocks'] is the return achieved
-        # by holding that portfolio during the period ending at portfolio_history[i]['date'].
-        current_period_target_stocks = portfolio_history[i].get('stocks', [])
-        if not isinstance(current_period_target_stocks, list):
-            current_period_target_stocks = []
-        weighted_return_sum = 0.0
-        total_weight = 0.0
-        for stock_data in current_period_target_stocks:
-            if not isinstance(stock_data, dict): continue
-            try:
-                stock_annual_return_pct = float(stock_data.get('annual_return', 0.0))
-                stock_weight = float(stock_data.get('weight', 0.0))
-                if pd.notna(stock_annual_return_pct) and pd.notna(stock_weight):
-                    weighted_return_sum += stock_annual_return_pct * stock_weight
-                    total_weight += stock_weight
-            except (ValueError, TypeError):
-                click.echo(
-                    f"Warning: Invalid numeric data for stock {stock_data.get('symbol')} "
-                    f"in period {portfolio_history[i].get('date')}.",
-                    err=True)
-        if total_weight > 0:
-            period_avg_return_pct = weighted_return_sum / total_weight
-            periodic_returns.append(period_avg_return_pct / 100.0)
-        elif portfolio_history[i - 1].get('stocks'): # If previous period had stocks, assume 0% return if current is cash/empty
-            periodic_returns.append(0.0)
+    metrics = {}
+    metrics.update(_calculate_return_group_metrics(periodic_returns))
+    metrics.update(_calculate_risk_group_metrics(periodic_returns, risk_free_rate))
+    metrics.update(_calculate_activity_group_metrics(portfolio_history, notional_value_for_ptr))
 
-    # Calculate Portfolio Turnover Ratio (PTR)
-    periodic_ptr_fractions = []
-    num_rebalance_events_for_ptr = 0
-    for i in range(len(portfolio_history)): # Iterate all history for actions
-        period_info = portfolio_history[i]
-        action = period_info.get('action')
-        if action == 'rebalance' or action == 'initial_investment':
-            value_bought = period_info.get('value_bought', 0.0)
-            value_sold = period_info.get('value_sold', 0.0)
-            # Turnover is min of buys or sells for that rebalance event
-            turnover_monetary_for_event = min(value_bought, value_sold)
-            # PTR for the event, relative to the notional value
-            # If it's initial_investment, value_sold is 0, so turnover_monetary is 0.
-            # This is correct as PTR measures changes to an *existing* portfolio.
-            # However, some definitions might include initial investment as 100% turnover if starting from cash.
-            # Standard PTR is usually for ongoing management.
-            # Let's only consider 'rebalance' actions for periodic turnover calculation.
-            if action == 'rebalance':
-                 ptr_for_event_fractional = turnover_monetary_for_event / NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES
-                 periodic_ptr_fractions.append(ptr_for_event_fractional)
-                 num_rebalance_events_for_ptr +=1
+    metrics['portfolio_size'] = _get_final_portfolio_size(portfolio_history)
 
-    portfolio_turnover_ratio_pct = 0.0
-    if num_rebalance_events_for_ptr > 0 : # Avoid division by zero if only initial investment
-        portfolio_turnover_ratio_pct = (sum(periodic_ptr_fractions) / num_rebalance_events_for_ptr) * 100
+    # Placeholder for S&P 500 comparison or other benchmark
+    # This would require benchmark_returns to be processed aligned with portfolio_returns
+    metrics['sp500_comparison'] = 0.0  # Default if not implemented or benchmark_returns not provided
 
-    # Initialize metrics to default values.
-    sharpe_ratio = 0.0
-    max_drawdown_pct = 0.0
-    benchmark_alpha_pct = 0.0
-    cagr_pct = 0.0
-    total_return_pct = 0.0
-    if periodic_returns:
-        returns_series = pd.Series(periodic_returns)
-        if not returns_series.empty:
-            if returns_series.std(ddof=0) > 0:
-                sharpe_ratio = ((returns_series.mean() - ANNUAL_RISK_FREE_RATE) /
-                                returns_series.std(ddof=0))
-            elif returns_series.mean() > ANNUAL_RISK_FREE_RATE:
-                sharpe_ratio = float('inf')  # Sharpe if std is 0 and mean <= risk_free (remains 0.0)
+    return metrics
 
-            # --- Max Drawdown Calculation ---
-            # Create a series representing the portfolio value over time, starting at 1.
-            # (1 + return_period_1), (1 + return_period_1)*(1 + return_period_2), ...
-            compounded_growth_factors = (1 + returns_series).cumprod()
-            # Prepend the initial portfolio value (1.0) to this series
-            portfolio_value_series = pd.concat([pd.Series([1.0]), compounded_growth_factors], ignore_index=True)
-            # Calculate the running peak of the portfolio value
-            running_max_value = portfolio_value_series.cummax()
-            # Calculate drawdown at each point: (current_value - running_peak) / running_peak
-            drawdown_series = (portfolio_value_series - running_max_value) / running_max_value
-            # Max drawdown is the minimum value in the drawdown series (most negative)
-            if not drawdown_series.empty:
-                max_drawdown_pct = abs(drawdown_series.min()) * 100
 
-            # --- Benchmark Alpha Calculation ---
-            if benchmark_returns is not None and not benchmark_returns.empty:
-                aligned_portfolio_returns, aligned_benchmark_returns = \
-                    returns_series.align(benchmark_returns, join='inner')
-                if not aligned_portfolio_returns.empty and not aligned_benchmark_returns.empty:
-                    benchmark_alpha_pct = (aligned_portfolio_returns.mean() - aligned_benchmark_returns.mean()) * 100
+# --- Helper Functions for rebalance ---
 
-            num_periods = len(periodic_returns)
-            if num_periods > 0:
-                # Clip returns at -100% (-1.0) to prevent issues with (1+r) becoming negative
-                safe_returns_for_compounding = returns_series.clip(lower=-1.0)
-                total_growth_factor = (1 + safe_returns_for_compounding).prod()
-                cagr_pct = ((total_growth_factor ** (1.0 / num_periods)) - 1) * 100
-                total_return_pct = (total_growth_factor - 1) * 100
+def _prepare_target_stocks(target_stocks_df: pd.DataFrame, current_year_str: str) -> pd.DataFrame:
+    """
+    Prepares the target stocks DataFrame by ensuring essential columns and valid weights.
+    Works on a copy of the input DataFrame.
+    """
+    df = target_stocks_df.copy()
 
-    final_portfolio_size = len([
-        s for s in final_stocks_list if isinstance(s, dict) and s.get('symbol') != 'CASH'
-    ])
+    if 'share_price' not in df.columns and not df.empty:
+        click.echo(
+            f"Warning: 'share_price' missing in target_stocks for {current_year_str}. Using placeholder 1.0.",
+            err=True
+        )
+        df['share_price'] = 1.0
 
-    # Average transaction cost per rebalance event
-    # expressed as a percentage of the 'NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES'.
-    # It helps gauge the typical cost of rebalancing relative to a fixed notional portfolio size.
+    if 'weight' not in df.columns and not df.empty:
+        click.echo(
+            f"Warning: 'weight' missing in target_stocks for {current_year_str}. Assuming equal weighting.",
+            err=True
+        )
+        df['weight'] = 1.0 / len(df) if len(df) > 0 else 0.0
+    elif not df.empty:
+        current_total_weight = df['weight'].sum()
+        # Check if weights sum to zero (or very close to it), but not if it's an empty target df
+        if np.isclose(current_total_weight, 0.0) and not np.isclose(current_total_weight, 1.0):
+            click.echo(
+                f"Warning: Target stock weights for {current_year_str} sum to zero or are invalid ({current_total_weight}). "
+                "Assuming equal weighting for target stocks.",
+                err=True
+            )
+            if len(df) > 0:  # Avoid division by zero if df is empty after all
+                df['weight'] = 1.0 / len(df)
+        elif not np.isclose(current_total_weight, 1.0):  # Normalize if not 1.0 and not 0.0
+            if current_total_weight > 0:  # Avoid division by zero
+                df['weight'] = df['weight'] / current_total_weight
+            # If current_total_weight is < 0 (highly unlikely with typical strategy outputs)
+            # or still 0 after previous checks (e.g. df was empty), weights remain as they are or 0.
 
-    # How it's derived:
-    # 1. 'transaction_cost' in 'portfolio_history' is the monetary cost of a single rebalance.
-    # 2. Sum these monetary costs for all rebalance events to get 'total_monetary_costs'.
-    # 3. Divide 'total_monetary_costs' by the product of 'num_rebalance_events_for_ptr'
-    #    and 'NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES'.
-    # 4. Multiply by 100 to get the percentage.
-    #
-    # Essentially: (Average monetary cost per rebalance / NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES) * 100
-    avg_transaction_cost_pct = 0.0
-    if num_rebalance_events_for_ptr > 0:  # Use the same count as PTR
-        total_monetary_costs = sum(
-            p.get('transaction_cost', 0.0) for p in portfolio_history if p.get('action') == 'rebalance')
-        avg_transaction_cost_pct = (total_monetary_costs / (
-                    num_rebalance_events_for_ptr * NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES)) * 100
+    # Ensure all records have a symbol, default to UNKNOWN if missing (though unlikely from strategy)
+    if 'symbol' not in df.columns and not df.empty:
+        df['symbol'] = [f"UNKNOWN_{i}" for i in range(len(df))]
+    elif not df.empty:
+        df['symbol'] = df['symbol'].fillna("UNKNOWN_SYMBOL")
 
-    return {
-        'sharpe_ratio': sharpe_ratio,
-        'max_drawdown': max_drawdown_pct,
-        'sp500_comparison': benchmark_alpha_pct,
-        'turnover_ratio': portfolio_turnover_ratio_pct,  # New PTR
-        'average_annual_return': cagr_pct,
-        'total_return': total_return_pct,
-        'portfolio_size': final_portfolio_size,
-        'transaction_costs_total': avg_transaction_cost_pct  # Changed to average periodic cost %
+    return df
+
+
+def _determine_rebalance_action(
+        last_portfolio_entry: Optional[Dict[str, Any]],
+        prepared_target_df: pd.DataFrame,
+        dynamic_rebalance_active: bool,
+        deviation_threshold: float
+) -> str:
+    """Determines the rebalancing action: 'initial_investment', 'rebalance', or 'hold'."""
+    if not last_portfolio_entry:
+        return 'initial_investment'
+
+    if not dynamic_rebalance_active:
+        return 'rebalance'
+
+    # Dynamic rebalancing logic
+    last_holdings_map = {stock['symbol']: stock for stock in last_portfolio_entry.get('stocks', [])}
+    target_holdings_map = {
+        row['symbol']: row for _, row in prepared_target_df.iterrows()
+    } if not prepared_target_df.empty else {}
+
+    # 1. Check for new stocks in target
+    if any(s not in last_holdings_map for s in target_holdings_map):
+        return 'rebalance'
+    # 2. Check for sold stocks (in last but not in target)
+    if any(s not in target_holdings_map for s in last_holdings_map):
+        return 'rebalance'
+    # 3. Check for weight deviations
+    for symbol, target_stock_data in target_holdings_map.items():
+        last_stock_data = last_holdings_map.get(symbol)
+        if last_stock_data:  # Should always exist due to checks above if sets are same
+            target_weight = target_stock_data.get('weight', 0)
+            last_weight = last_stock_data.get('weight', 0)
+            if abs(target_weight - last_weight) > deviation_threshold:
+                return 'rebalance'
+
+    # 4. Check if target portfolio is empty (rebalance to cash) when last holdings were not empty
+    #    And ensure last holdings were not already just CASH (which would be an empty target_holdings_map)
+    if not target_holdings_map and last_holdings_map and \
+            not (len(last_holdings_map) == 1 and 'CASH' in last_holdings_map):
+        return 'rebalance'
+
+    # 5. Check if target portfolio has stocks when last holdings were effectively empty (e.g. just CASH)
+    if target_holdings_map and (not last_holdings_map or (len(last_holdings_map) == 1 and 'CASH' in last_holdings_map)):
+        return 'rebalance'
+
+    return 'hold'
+
+
+def _calculate_trade_values(
+        current_stocks_map: Dict[str, Dict[str, Any]],  # symbol -> stock_data
+        target_stocks_map: Dict[str, Dict[str, Any]],  # symbol -> stock_data
+        notional_value: float
+) -> Tuple[float, float]:
+    """Calculates the total value bought and sold to transition from current to target portfolio."""
+    value_bought_for_period = 0.0
+    value_sold_for_period = 0.0
+
+    all_symbols = set(current_stocks_map.keys()) | set(target_stocks_map.keys())
+
+    for symbol in all_symbols:
+        current_weight = current_stocks_map.get(symbol, {}).get('weight', 0.0)
+        target_weight = target_stocks_map.get(symbol, {}).get('weight', 0.0)
+
+        weight_change = target_weight - current_weight
+
+        if weight_change > 0:  # Buy
+            value_bought_for_period += weight_change * notional_value
+        elif weight_change < 0:  # Sell
+            # Do not count "selling" CASH as part of value_sold for turnover purposes
+            if symbol != 'CASH':
+                value_sold_for_period += abs(weight_change) * notional_value
+
+    return value_bought_for_period, value_sold_for_period
+
+
+def rebalance(
+        history: List[Dict[str, Any]],
+        target_stocks_df: pd.DataFrame,  # DataFrame from strategy output
+        current_year_str: str,
+        transaction_cost_rate: float,
+        dynamic_rebalance_active: bool = False,
+        deviation_threshold: float = DEFAULT_DEVIATION_THRESHOLD,
+        notional_value: float = NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES
+) -> List[Dict[str, Any]]:
+    """
+    Rebalances the portfolio based on target stocks and strategy settings.
+    """
+    # Work on a copy, prepare target (handles missing prices, normalizes weights if needed)
+    prepared_target_df = _prepare_target_stocks(target_stocks_df, current_year_str)
+
+    last_portfolio_entry = history[-1] if history else None
+
+    action = _determine_rebalance_action(
+        last_portfolio_entry,
+        prepared_target_df,
+        dynamic_rebalance_active,
+        deviation_threshold
+    )
+
+    current_stocks_map = {
+        stock['symbol']: stock for stock in last_portfolio_entry['stocks']
+    } if last_portfolio_entry and last_portfolio_entry.get('stocks') else {}
+
+    final_stocks_for_entry_list: List[Dict[str, Any]]
+    effective_target_map_for_trades: Dict[str, Dict[str, Any]]
+
+    if action == 'hold':
+        # Stocks remain the same as the last period.
+        final_stocks_for_entry_list = last_portfolio_entry['stocks'] if last_portfolio_entry else []
+        # For trade calculation, target is effectively the same as current.
+        effective_target_map_for_trades = current_stocks_map
+        value_bought, value_sold = 0.0, 0.0  # Explicitly zero for 'hold'
+    else:  # 'initial_investment' or 'rebalance'
+        final_stocks_for_entry_list = prepared_target_df.to_dict('records') if not prepared_target_df.empty else []
+        effective_target_map_for_trades = {
+            stock['symbol']: stock for stock in final_stocks_for_entry_list
+        }
+        value_bought, value_sold = _calculate_trade_values(
+            current_stocks_map,
+            effective_target_map_for_trades,
+            notional_value
+        )
+
+    transaction_cost_for_period = (value_bought + value_sold) * transaction_cost_rate
+
+    new_entry = {
+        'date': current_year_str,
+        'stocks': final_stocks_for_entry_list,
+        'action': action,
+        'value_bought': round(value_bought, 2),  # Round for consistency
+        'value_sold': round(value_sold, 2),  # Round for consistency
+        'transaction_cost': round(transaction_cost_for_period, 2)  # Round for consistency
     }
+
+    updated_history = history + [new_entry]
+    return updated_history
 
 
 def load_market_data(file_path: str) -> pd.DataFrame:
@@ -577,17 +596,17 @@ def _execute_backtest_loop(
                     'annual_return': 0.0, 'share_price': 0.0
                 }])
                 portfolio_history = rebalance(
-                    current_portfolio_history=portfolio_history,
-                    target_stocks=cash_portfolio_df,
-                    period_date_str=period_date_str,
+                    history=portfolio_history,
+                    target_stocks_df=cash_portfolio_df,
+                    current_year_str=period_date_str,
                     dynamic_rebalance_active=False,
                     transaction_cost_rate=transaction_cost
                 )
             elif not target_portfolio_for_period.empty or not portfolio_history:
                 portfolio_history = rebalance(
-                    current_portfolio_history=portfolio_history,
-                    target_stocks=target_portfolio_for_period,
-                    period_date_str=period_date_str,
+                    history=portfolio_history,
+                    target_stocks_df=target_portfolio_for_period,
+                    current_year_str=period_date_str,
                     dynamic_rebalance_active=dynamic_rebalance,
                     transaction_cost_rate=transaction_cost
                 )

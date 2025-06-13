@@ -130,6 +130,7 @@ class TestRebalance:
         assert entry['value_sold'] == 0.0  # Sold from CASH
         assert entry['transaction_cost'] == pytest.approx(NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES * 1.0 * 0.001)
 
+
     def test_dynamic_rebalance_no_change(self, sample_portfolio_history_entry: Dict[str, Any]):
         current_history = [sample_portfolio_history_entry]
         # Target stocks are identical to current holdings
@@ -139,9 +140,9 @@ class TestRebalance:
             current_history,
             target_stocks_no_change.copy(),
             '2021',
+            transaction_cost_rate=0.001, # Using specific value from original test
             dynamic_rebalance_active=True,
-            deviation_threshold=0.05,
-            transaction_cost_rate=0.001
+            deviation_threshold=0.05
         )
         assert len(updated_history) == 2
         entry = updated_history[1]
@@ -162,9 +163,9 @@ class TestRebalance:
             current_history,
             target_stocks_deviated.copy(),
             '2021',
+            transaction_cost_rate=0.001,
             dynamic_rebalance_active=True,
-            deviation_threshold=0.05,
-            transaction_cost_rate=0.001
+            deviation_threshold=0.05
         )
         assert len(updated_history) == 2
         entry = updated_history[1]
@@ -183,6 +184,7 @@ class TestRebalance:
             current_history,
             target_stocks_new.copy(),
             '2021',
+            transaction_cost_rate=DEFAULT_TRANSACTION_COST,
             dynamic_rebalance_active=True,
             deviation_threshold=0.05
         )
@@ -201,6 +203,7 @@ class TestRebalance:
             current_history,
             target_stocks_sold.copy(),
             '2021',
+            transaction_cost_rate=DEFAULT_TRANSACTION_COST,
             dynamic_rebalance_active=True,
             deviation_threshold=0.05
         )
@@ -208,7 +211,7 @@ class TestRebalance:
         entry = updated_history[1]
         assert entry['action'] == 'rebalance'
 
-    @patch('click.echo')  # To check if the warning is printed
+    @patch('click.echo')
     def test_rebalance_target_weights_sum_zero(self, mock_click_echo, sample_portfolio_history_entry: Dict[str, Any]):
         current_history = [sample_portfolio_history_entry]
         target_stocks_zero_weight = pd.DataFrame([
@@ -217,11 +220,12 @@ class TestRebalance:
         ])
         updated_history = rebalance(
             current_history,
-            target_stocks_zero_weight.copy(),  # Pass a copy
-            '2021'
+            target_stocks_zero_weight.copy(),
+            '2021',
+            transaction_cost_rate=DEFAULT_TRANSACTION_COST
         )
         mock_click_echo.assert_any_call(
-            "Warning: Target stock weights for 2021 sum to zero or are invalid. "
+            "Warning: Target stock weights for 2021 sum to zero or are invalid (0.0). "
             "Assuming equal weighting for target stocks.",
             err=True
         )
@@ -242,8 +246,9 @@ class TestRebalance:
         ])
         updated_history = rebalance(
             current_history,
-            target_stocks_no_price.copy(),  # Pass a copy
-            '2021'
+            target_stocks_no_price.copy(),
+            '2021',
+            transaction_cost_rate=DEFAULT_TRANSACTION_COST # FIXED: Added argument
         )
         mock_click_echo.assert_any_call(
             "Warning: 'share_price' missing in target_stocks for 2021. Using placeholder 1.0.",
