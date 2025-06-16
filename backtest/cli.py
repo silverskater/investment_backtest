@@ -320,9 +320,38 @@ def _calculate_trade_values(
     return value_bought_for_period, value_sold_for_period
 
 
+def _get_portfolio_state_and_trades_for_action(
+        action: str,
+        last_portfolio_entry: Optional[Dict[str, Any]],
+        prepared_target_df: pd.DataFrame,
+        current_stocks_map: Dict[str, Dict[str, Any]],
+        notional_value: float
+) -> Tuple[List[Dict[str, Any]], float, float]:
+    """
+    Determines the final stocks for the new portfolio entry and calculates
+    trade values based on the rebalance action.
+    """
+    if action == 'hold':
+        # Stocks remain the same as the last period.
+        # For trade calculation, target is effectively the same as current.
+        final_stocks_for_entry_list = last_portfolio_entry['stocks'] if last_portfolio_entry else []
+        value_bought, value_sold = 0.0, 0.0  # Explicitly zero for 'hold'
+    else:  # 'initial_investment' or 'rebalance'
+        final_stocks_for_entry_list = prepared_target_df.to_dict('records') if not prepared_target_df.empty else []
+        effective_target_map_for_trades = {
+            stock['symbol']: stock for stock in final_stocks_for_entry_list
+        }
+        value_bought, value_sold = _calculate_trade_values(
+            current_stocks_map,
+            effective_target_map_for_trades,
+            notional_value
+        )
+    return final_stocks_for_entry_list, value_bought, value_sold
+
+
 def rebalance(
         history: List[Dict[str, Any]],
-        target_stocks_df: pd.DataFrame,  # DataFrame from strategy output
+        target_stocks_df: pd.DataFrame,
         current_year_str: str,
         transaction_cost_rate: float,
         dynamic_rebalance_active: bool = False,
@@ -334,7 +363,6 @@ def rebalance(
     """
     # Work on a copy, prepare target (handles missing prices, normalizes weights if needed)
     prepared_target_df = _prepare_target_stocks(target_stocks_df, current_year_str)
-
     last_portfolio_entry = history[-1] if history else None
 
     action = _determine_rebalance_action(
@@ -348,23 +376,12 @@ def rebalance(
         stock['symbol']: stock for stock in last_portfolio_entry['stocks']
     } if last_portfolio_entry and last_portfolio_entry.get('stocks') else {}
 
-    final_stocks_for_entry_list: List[Dict[str, Any]]
-    effective_target_map_for_trades: Dict[str, Dict[str, Any]]
-
-    if action == 'hold':
-        # Stocks remain the same as the last period.
-        final_stocks_for_entry_list = last_portfolio_entry['stocks'] if last_portfolio_entry else []
-        # For trade calculation, target is effectively the same as current.
-        effective_target_map_for_trades = current_stocks_map
-        value_bought, value_sold = 0.0, 0.0  # Explicitly zero for 'hold'
-    else:  # 'initial_investment' or 'rebalance'
-        final_stocks_for_entry_list = prepared_target_df.to_dict('records') if not prepared_target_df.empty else []
-        effective_target_map_for_trades = {
-            stock['symbol']: stock for stock in final_stocks_for_entry_list
-        }
-        value_bought, value_sold = _calculate_trade_values(
+    final_stocks_for_entry_list, value_bought, value_sold = \
+        _get_portfolio_state_and_trades_for_action(
+            action,
+            last_portfolio_entry,
+            prepared_target_df,
             current_stocks_map,
-            effective_target_map_for_trades,
             notional_value
         )
 
@@ -374,13 +391,12 @@ def rebalance(
         'date': current_year_str,
         'stocks': final_stocks_for_entry_list,
         'action': action,
-        'value_bought': round(value_bought, 2),  # Round for consistency
-        'value_sold': round(value_sold, 2),  # Round for consistency
-        'transaction_cost': round(transaction_cost_for_period, 2)  # Round for consistency
+        'value_bought': round(value_bought, 2),
+        'value_sold': round(value_sold, 2),
+        'transaction_cost': round(transaction_cost_for_period, 2)
     }
 
-    updated_history = history + [new_entry]
-    return updated_history
+    return history + [new_entry]
 
 
 def load_market_data(file_path: str) -> pd.DataFrame:
