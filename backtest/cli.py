@@ -160,6 +160,25 @@ def _run_strategy_backtest(
         return 1
 
 
+def _calculate_weighted_portfolio_return(portfolio_entry: Optional[Dict[str, Any]]) -> float:
+    """Calculates the weighted average return from a portfolio history entry's stocks."""
+    if not portfolio_entry or not portfolio_entry.get('stocks'):
+        return 0.0
+
+    stocks_df = pd.DataFrame(portfolio_entry['stocks'])
+    if stocks_df.empty or 'annual_return' not in stocks_df.columns or 'weight' not in stocks_df.columns:
+        # Handle case where portfolio is just CASH with no annual_return specified, or missing columns
+        if len(stocks_df) == 1 and stocks_df.iloc[0].get('symbol') == 'CASH':
+            return pd.to_numeric(stocks_df.iloc[0].get('annual_return', 0.0), errors='coerce').fillna(0.0) / 100.0
+        return 0.0
+
+    # Ensure 'annual_return' and 'weight' are numeric, fill NaNs appropriately
+    annual_returns_numeric = pd.to_numeric(stocks_df['annual_return'], errors='coerce').fillna(0.0)
+    weights_numeric = pd.to_numeric(stocks_df['weight'], errors='coerce').fillna(0.0)
+
+    return (annual_returns_numeric * weights_numeric).sum()
+
+
 def _process_single_period_backtest(
         year: int,
         full_market_data: pd.DataFrame,
@@ -184,22 +203,9 @@ def _process_single_period_backtest(
 
     if current_year_data.empty:
         click.echo(f"Warning: No data available for {year}. Skipping rebalance.", err=True)
-        # If no data, portfolio state doesn't change for this period's rebalance action
-        # Display return calculation later will use the last known state from updated_portfolio_history
-        # If history is empty and no data, it remains empty.
-        if updated_portfolio_history:  # Calculate return based on existing portfolio if it exists
-            last_period_entry = updated_portfolio_history[-1]
-            last_period_stocks_df = pd.DataFrame(last_period_entry.get('stocks', []))
-            if not last_period_stocks_df.empty and \
-                    'annual_return' in last_period_stocks_df.columns and \
-                    'weight' in last_period_stocks_df.columns:
-                annual_returns_numeric = pd.to_numeric(
-                    last_period_stocks_df['annual_return'], errors='coerce'
-                ).fillna(0.0)
-                weights_numeric = pd.to_numeric(
-                    last_period_stocks_df['weight'], errors='coerce'
-                ).fillna(0.0)
-                period_display_return_info['return'] = (annual_returns_numeric * weights_numeric).sum()
+        if updated_portfolio_history:
+            # Calculate return based on the last known portfolio state
+            period_display_return_info['return'] = _calculate_weighted_portfolio_return(updated_portfolio_history[-1])
         return updated_portfolio_history, period_display_return_info
 
     strategy_output = execute_strategy(
@@ -250,21 +256,10 @@ def _process_single_period_backtest(
         # If target_portfolio_for_period is empty and history is also empty (initial investment to CASH)
         # it's covered by the elif above, as target_portfolio_for_period would have been set to CASH df.
 
-    current_period_display_return = 0.0
+    # Calculate display return for the current period based on the *newly updated* history
     if updated_portfolio_history:
-        last_period_entry = updated_portfolio_history[-1]
-        last_period_stocks_df = pd.DataFrame(last_period_entry.get('stocks', []))
-        if not last_period_stocks_df.empty and \
-                'annual_return' in last_period_stocks_df.columns and \
-                'weight' in last_period_stocks_df.columns:
-            annual_returns_numeric = pd.to_numeric(
-                last_period_stocks_df['annual_return'], errors='coerce'
-            ).fillna(0.0)
-            weights_numeric = pd.to_numeric(
-                last_period_stocks_df['weight'], errors='coerce'
-            ).fillna(0.0)
-            current_period_display_return = (annual_returns_numeric * weights_numeric).sum()
-    period_display_return_info['return'] = current_period_display_return
+        period_display_return_info['return'] = _calculate_weighted_portfolio_return(updated_portfolio_history[-1])
+
     return updated_portfolio_history, period_display_return_info
 
 
