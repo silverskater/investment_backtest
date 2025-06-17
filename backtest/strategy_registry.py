@@ -1,30 +1,47 @@
-"""Module for centralized strategy registration and management."""
-from typing import Dict, Type, Callable, List, Optional, Any, TYPE_CHECKING
+"""Module for centralized strategy registration and management.
+
+This module defines the `StrategyRegistry` class, which acts as a central
+repository for all investment strategy implementations. It allows strategies
+to be registered by name and provides methods to look up, instantiate,
+and execute these strategies.
+"""
+from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING, Type
+
 import pandas as pd
 
 if TYPE_CHECKING:
     # This import is only for static type checkers and doesn't run at runtime,
-    # thus avoiding the circular import.
+    # thus avoiding a potential circular import with backtest.strategies.base.
     from backtest.strategies.base import Strategy
 
 
 class StrategyRegistry:
     """Central registry for investment strategy implementations.
 
-    This registry allows strategies to register themselves and provides
-    methods to look up, instantiate, and execute strategies by name.
+    This class uses class methods to manage a dictionary of registered strategies.
+    Strategies are stored with their class and description.
+
+    Attributes:
+        _strategies: A dictionary mapping strategy names to their class and
+                     description.
     """
 
     _strategies: Dict[str, Dict[str, Any]] = {}
 
     @classmethod
-    def register(cls, name: str, strategy_class: Type['Strategy'], description: str = "") -> None: # Use string literal 'Strategy'
-        """Register a strategy with the registry.
+    def register(
+        cls, name: str, strategy_class: Type['Strategy'], description: str = ""
+    ) -> None:
+        """Registers a strategy with the registry.
+
+        The strategy's description is taken from the provided `description`
+        argument, or falls back to the class's docstring, or a default
+        description if neither is available.
 
         Args:
-            name: Unique name for the strategy
-            strategy_class: The strategy class to register. Note: Type hint uses a string.
-            description: Optional description of the strategy
+            name: The unique name for the strategy.
+            strategy_class: The strategy class (subclass of `Strategy`) to register.
+            description: An optional description of the strategy.
         """
         cls._strategies[name] = {
             "class": strategy_class,
@@ -32,50 +49,51 @@ class StrategyRegistry:
         }
 
     @classmethod
-    def get_strategy_class(cls, name: str) -> Optional[Type['Strategy']]: # Use string literal 'Strategy'
-        """Get the class for a registered strategy.
+    def get_strategy_class(cls, name: str) -> Optional[Type['Strategy']]:
+        """Retrieves the class for a registered strategy.
 
         Args:
-            name: Name of the strategy to retrieve
+            name: The name of the strategy to retrieve.
 
         Returns:
-            The strategy class if found, None otherwise
+            The strategy class if found, otherwise None.
         """
         strategy_info = cls._strategies.get(name)
         return strategy_info["class"] if strategy_info else None
 
     @classmethod
-    def create_strategy(cls, name: str) -> Optional['Strategy']: # Use string literal 'Strategy'
-        """Create an instance of a registered strategy.
+    def create_strategy(cls, name: str) -> Optional['Strategy']:
+        """Creates an instance of a registered strategy.
 
         Args:
-            name: Name of the strategy to instantiate
+            name: The name of the strategy to instantiate.
 
         Returns:
-            A new strategy instance if found, None otherwise
+            A new instance of the strategy if found, otherwise None.
         """
         strategy_class = cls.get_strategy_class(name)
         return strategy_class() if strategy_class else None
 
     @classmethod
     def get_strategy_description(cls, name: str) -> Optional[str]:
-        """Get the description of a registered strategy.
+        """Gets the description of a registered strategy.
 
         Args:
-            name: Name of the strategy
+            name: The name of the strategy.
 
         Returns:
-            Strategy description if found, None otherwise
+            The strategy's description string if found, otherwise None.
         """
         strategy_info = cls._strategies.get(name)
         return strategy_info["description"] if strategy_info else None
 
     @classmethod
     def list_strategies(cls) -> List[Dict[str, str]]:
-        """List all registered strategies.
+        """Lists all registered strategies.
 
         Returns:
-            List of dictionaries with strategy information (name, description)
+            A list of dictionaries, where each dictionary contains the
+            'name' and 'description' of a registered strategy.
         """
         return [
             {"name": name, "description": info["description"]}
@@ -84,33 +102,35 @@ class StrategyRegistry:
 
     @classmethod
     def is_strategy_registered(cls, name: str) -> bool:
-        """Check if a strategy is registered.
+        """Checks if a strategy is registered.
 
         Args:
-            name: Name of the strategy to check
+            name: The name of the strategy to check.
 
         Returns:
-            True if the strategy is registered, False otherwise
+            True if the strategy is registered, False otherwise.
         """
         return name in cls._strategies
 
     @classmethod
-    def execute_strategy(cls, name: str, data: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute a registered strategy on the provided market data.
+    def execute_strategy(
+        cls, name: str, data: pd.DataFrame, params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Executes a registered strategy on the provided market data.
 
         Args:
-            name: Name of the strategy to execute
-            data: DataFrame containing market data
-            params: Dictionary of strategy parameters
+            name: The name of the strategy to execute.
+            data: A pandas DataFrame containing the market data for the period.
+            params: A dictionary of parameters to be passed to the strategy.
 
         Returns:
-            Dictionary containing strategy results and metrics
+            A dictionary containing the strategy's results, typically including
+            a 'portfolio' DataFrame and any strategy-specific 'metrics'.
 
         Raises:
-            ValueError: If the strategy is not registered
+            ValueError: If the strategy is not registered.
         """
         strategy = cls.create_strategy(name)
         if not strategy:
             raise ValueError(f"Strategy implementation not found for '{name}'")
-
         return strategy.execute_strategy(data, params)

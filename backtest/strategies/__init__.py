@@ -1,4 +1,10 @@
-"""Package containing strategy implementations for the backtest tool."""
+"""Initializes the strategies package and registers available strategies.
+
+This module is responsible for automatically discovering and registering all
+strategy implementations found within the `backtest.strategies` package.
+It scans for Python modules, imports them, and registers any classes
+that are subclasses of `backtest.strategies.base.Strategy`.
+"""
 import os
 import importlib
 import inspect
@@ -7,47 +13,38 @@ from backtest.strategies.base import Strategy
 
 
 def _register_strategies() -> None:
-    """Automatically discover and register all strategy implementations.
+    """Automatically discovers and registers all strategy implementations.
 
-    This function dynamically imports all Python modules in the strategies package
-    and registers any Strategy subclasses they contain with the StrategyRegistry.
+    This function dynamically imports Python modules from the `strategies`
+    package directory. It then inspects these modules for classes that
+    inherit from the `Strategy` base class and registers them with the
+    `StrategyRegistry`.
     """
-    # Import the registry here to avoid circular imports
+    # Import the registry here to avoid circular imports at the module level.
     from backtest.strategy_registry import StrategyRegistry
 
-    # Get the strategies directory path
     strategies_dir = os.path.dirname(os.path.abspath(__file__))
+    strategy_files = [
+        f for f in os.listdir(strategies_dir)
+        if f.endswith('.py') and not f.startswith('__')
+    ]
 
-    # Find all potential strategy modules (Python files in the strategies directory)
-    strategy_files = [f for f in os.listdir(strategies_dir)
-                      if f.endswith('.py') and not f.startswith('__')]
-
-    # Import each module and register its Strategy classes
     for file_name in strategy_files:
-        # Get the module name (file name without .py extension)
         module_name = os.path.splitext(file_name)[0]
-
         try:
-            # Import the module
             module = importlib.import_module(f"backtest.strategies.{module_name}")
-
-            # Find all Strategy subclasses in the module
             for name, obj in inspect.getmembers(module):
-                # Check if it's a class, is a Strategy subclass, and is not Strategy itself
-                if (inspect.isclass(obj) and 
-                        issubclass(obj, Strategy) and 
+                if (inspect.isclass(obj) and
+                        issubclass(obj, Strategy) and
                         obj is not Strategy):
-                    # Extract description from class docstring
                     description = ""
                     if obj.__doc__:
+                        # Use the first line of the docstring as the description.
                         description = obj.__doc__.split('\n')[0].strip()
-
-                    # Register the strategy with its module name
                     StrategyRegistry.register(module_name, obj, description)
         except (ImportError, AttributeError) as e:
-            # Log the error but continue with other modules
             print(f"Error importing strategy module {module_name}: {e}")
 
 
-# Automatically register all strategies when the package is imported
+# Automatically register all strategies when the package is imported.
 _register_strategies()

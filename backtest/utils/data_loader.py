@@ -1,10 +1,9 @@
-
+"""Utility functions for loading and preparing market data."""
 import json
 import os
 
 import click
 import pandas as pd
-
 from pandas.errors import EmptyDataError
 
 from backtest.stress_tests import apply_stress_test
@@ -17,7 +16,23 @@ def prepare_market_data(
         end_year: int,
         include_delisted: bool
 ) -> pd.DataFrame:
-    """Loads and preprocesses market data."""
+    """Loads and preprocesses market data for backtesting.
+
+    This function loads data from the specified file, applies any selected
+    stress test scenarios, and handles options related to delisted companies.
+
+    Args:
+        data_file_path: Path to the CSV or JSON file containing market data.
+        stress_test: Name of the stress test scenario to apply (e.g., 'none',
+                     '2008crisis').
+        start_year: The start year of the backtest period.
+        end_year: The end year of the backtest period.
+        include_delisted: Boolean flag to indicate whether to include data for
+                          delisted companies.
+
+    Returns:
+        A pandas DataFrame containing the prepared market data.
+    """
     click.echo(f"Loading market data from {data_file_path}...")
     full_market_data = _load_market_data(data_file_path)
 
@@ -49,8 +64,9 @@ def _load_market_data(file_path: str) -> pd.DataFrame:
         A pandas DataFrame containing the market data.
 
     Raises:
-        FileNotFoundError: If the specified file_path does not exist.
-        ValueError: If the file format is unsupported (not CSV or JSON).
+        FileNotFoundError: If the specified `file_path` does not exist.
+        ValueError: If the file format is unsupported (not CSV or JSON),
+                    or if there's an error processing the file content.
     """
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Data file not found: {file_path}")
@@ -63,19 +79,18 @@ def _load_market_data(file_path: str) -> pd.DataFrame:
             click.echo(f"Warning: CSV file {file_path} is empty. Returning empty DataFrame.", err=True)
             return pd.DataFrame()
         except Exception as e:
-            raise ValueError(f"Error processing CSV file {file_path}: {e}")
+            raise ValueError(f"Error processing CSV file {file_path}: {e}") from e
     elif file_extension == '.json':
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 data_list = json.load(f)
-            # Handle empty JSON list specifically
             if isinstance(data_list, list) and not data_list:
                 return pd.DataFrame()
             return pd.DataFrame(data_list)
         except json.JSONDecodeError as e:
-            raise ValueError(f"Error decoding JSON from {file_path}: {e}")
-        except Exception as e:  # Catch other potential errors during file reading/DataFrame creation
-            raise ValueError(f"Error processing JSON file {file_path}: {e}")
+            raise ValueError(f"Error decoding JSON from {file_path}: {e}") from e
+        except Exception as e:
+            raise ValueError(f"Error processing JSON file {file_path}: {e}") from e
     else:
         raise ValueError(
             f"Unsupported file format: '{file_extension}'. Please use CSV or JSON."

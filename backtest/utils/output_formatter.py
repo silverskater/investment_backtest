@@ -1,6 +1,10 @@
+"""Utility functions for formatting and outputting backtest results.
+
+This module handles the presentation of backtest metrics to the console
+and saving detailed results to files in JSON or CSV format.
+"""
 import json
 import os
-
 from typing import Any, Dict, List, Optional
 
 import click
@@ -25,15 +29,32 @@ def format_and_output_results(
         yearly_display_returns: List[Dict[str, Any]],
         portfolio_history: List[Dict[str, Any]]
 ) -> None:
-    """Displays metrics on console and saves results to file.
+    """Displays metrics on the console and saves results to a file.
+
+    Args:
+        final_performance_metrics: Dictionary of overall performance metrics.
+        output_path: Optional path to save the results file.
+        strategy_name: Name of the executed strategy.
+        strategy_description: Description of the strategy.
+        start_year: Start year of the backtest.
+        end_year: End year of the backtest.
+        data_file_path: Path to the input data file.
+        rebalance_frequency: Rebalancing frequency used.
+        dynamic_rebalance: Whether dynamic rebalancing was enabled.
+        transaction_cost: Transaction cost rate.
+        stress_test: Name of the stress test scenario applied.
+        include_delisted: Whether delisted companies were included.
+        benchmark: Benchmark symbol used for comparison.
+        strategy_cli_params: CLI parameters specific to the strategy.
+        yearly_display_returns: List of yearly return information.
+        portfolio_history: Detailed history of portfolio states and actions.
 
     Raises:
-        IOError: If the output was not written successfully.
+        IOError: If writing to the output file fails.
     """
     _display_results_on_console(final_performance_metrics, start_year, end_year)
 
     if output_path:
-        # The _save_results_to_file function will raise IOError on failure
         _save_results_to_file(
             output_path, final_performance_metrics, strategy_name, strategy_description,
             start_year, end_year, data_file_path, rebalance_frequency,
@@ -47,7 +68,13 @@ def _display_results_on_console(
     start_year: int,
     end_year: int
 ) -> None:
-    """Displays key backtest metrics on the console."""
+    """Displays key backtest metrics on the console.
+
+    Args:
+        metrics: A dictionary of calculated performance metrics.
+        start_year: The start year of the backtest period.
+        end_year: The end year of the backtest period.
+    """
     click.echo("\nBacktest Results:")
     click.echo(f"Period: {start_year}-{end_year}")
     click.echo(f"Sharpe Ratio: {metrics.get('sharpe_ratio', 0.0):.2f}")
@@ -70,6 +97,7 @@ def _display_results_on_console(
         f"{metrics.get('transaction_costs_total', 0.0):.2f}%"
     )
 
+
 def _save_results_to_file(
     output_path: str,
     final_performance_metrics: Dict[str, float],
@@ -90,8 +118,29 @@ def _save_results_to_file(
 ) -> None:
     """Saves backtest results to the specified file (JSON or CSV).
 
+    If the `output_path` extension is not '.json', it defaults to saving
+    as JSON by appending '.json' to the provided path.
+
+    Args:
+        output_path: The path where the results file will be saved.
+        final_performance_metrics: Dictionary of overall performance metrics.
+        strategy_name: Name of the executed strategy.
+        strategy_description: Description of the strategy.
+        start_year: Start year of the backtest.
+        end_year: End year of the backtest.
+        data_file_path: Path to the input data file.
+        rebalance_frequency: Rebalancing frequency used.
+        dynamic_rebalance: Whether dynamic rebalancing was enabled.
+        transaction_cost: Transaction cost rate.
+        stress_test: Name of the stress test scenario applied.
+        include_delisted: Whether delisted companies were included.
+        benchmark: Benchmark symbol used for comparison.
+        strategy_cli_params: CLI parameters specific to the strategy.
+        yearly_display_returns: List of yearly return information.
+        portfolio_history: Detailed history of portfolio states and actions.
+
     Raises:
-        IOError: If the output file cannot be written.
+        IOError: If writing to the output file fails.
     """
     output_file_extension = os.path.splitext(output_path)[1].lower()
     actual_output_path = output_path
@@ -104,8 +153,7 @@ def _save_results_to_file(
                 "For full details (portfolio history, etc.), use JSON output."
             )
         except IOError as e:
-            raise IOError(f"Failed to write CSV to {actual_output_path}: {e}")
-
+            raise IOError(f"Failed to write CSV to {actual_output_path}: {e}") from e
     else:
         if output_file_extension != '.json':
             actual_output_path = f"{output_path}.json"
@@ -143,4 +191,4 @@ def _save_results_to_file(
                 json.dump(output_content, f, default=str, indent=2)
             click.echo(f"Full backtest results saved to {actual_output_path}")
         except IOError as e:
-            raise IOError(f"Failed to write JSON to {actual_output_path}: {e}")
+            raise IOError(f"Failed to write JSON to {actual_output_path}: {e}") from e

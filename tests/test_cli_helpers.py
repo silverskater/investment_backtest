@@ -1,24 +1,34 @@
-import pytest
-import pandas as pd
+"""Unit tests for CLI helper functions, primarily rebalance and metrics.
 
-from typing import List, Dict, Any
+This module contains unit tests for utility functions that support the CLI,
+focusing on the `rebalance` logic from `backtest.utils.rebalance` and
+the `calculate_metrics` function from `backtest.utils.metrics_calculator`.
+"""
+from typing import Any, Dict, List
 from unittest.mock import patch
 
-from backtest.utils.metrics_calculator import calculate_metrics
-from backtest.utils.rebalance import rebalance
+import pandas as pd
+import pytest
 
 from backtest.constants import (
+    DEFAULT_DEVIATION_THRESHOLD,
     DEFAULT_TRANSACTION_COST,
-    NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES,
-    DEFAULT_DEVIATION_THRESHOLD
+    NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES
 )
+from backtest.utils.metrics_calculator import calculate_metrics
+from backtest.utils.rebalance import rebalance
 
 
 # --- Fixtures and Helper Data ---
 
 @pytest.fixture
 def sample_target_stocks_df() -> pd.DataFrame:
-    """Provides a sample target_stocks DataFrame."""
+    """Provides a sample target_stocks DataFrame for testing.
+
+    Returns:
+        A pandas DataFrame with sample stock data including symbols, weights,
+        share prices, and annual returns.
+    """
     return pd.DataFrame([
         {'symbol': 'AAPL', 'weight': 0.5, 'share_price': 150.0, 'annual_return': 10.0},
         {'symbol': 'MSFT', 'weight': 0.3, 'share_price': 300.0, 'annual_return': 5.0},
@@ -27,8 +37,18 @@ def sample_target_stocks_df() -> pd.DataFrame:
 
 
 @pytest.fixture
-def sample_portfolio_history_entry(sample_target_stocks_df: pd.DataFrame) -> Dict[str, Any]:
-    """Provides a sample portfolio history entry."""
+def sample_portfolio_history_entry(
+    sample_target_stocks_df: pd.DataFrame
+) -> Dict[str, Any]:
+    """Provides a sample portfolio history entry for testing.
+
+    Args:
+        sample_target_stocks_df: A fixture providing a sample target stocks DataFrame.
+
+    Returns:
+        A dictionary representing a single entry in a portfolio's history,
+        simulating an initial investment.
+    """
     return {
         'date': '2021',
         'stocks': sample_target_stocks_df.to_dict('records'),
@@ -39,10 +59,12 @@ def sample_portfolio_history_entry(sample_target_stocks_df: pd.DataFrame) -> Dic
     }
 
 
-# --- Tests for rebalance() ---
 @pytest.mark.unit
 class TestRebalance:
+    """Test suite for the `rebalance` function."""
+
     def test_initial_investment(self, sample_target_stocks_df: pd.DataFrame):
+        """Tests the rebalance function for an initial portfolio investment."""
         history: List[Dict[str, Any]] = []
         updated_history = rebalance(
             history,
@@ -57,15 +79,20 @@ class TestRebalance:
         assert len(entry['stocks']) == 3
         assert entry['value_bought'] == pytest.approx(NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES)
         assert entry['value_sold'] == 0.0
-        assert entry['transaction_cost'] == pytest.approx(NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES * 0.001)
+        assert entry['transaction_cost'] == pytest.approx(
+            NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES * 0.001
+        )
 
-    def test_standard_rebalance_buys_sells(self, sample_portfolio_history_entry: Dict[str, Any]):
+    def test_standard_rebalance_buys_sells(
+        self, sample_portfolio_history_entry: Dict[str, Any]
+    ):
+        """Tests a standard rebalance operation involving both buys and sells."""
         current_history = [sample_portfolio_history_entry]
         new_target_stocks = pd.DataFrame([
-            {'symbol': 'AAPL', 'weight': 0.4, 'share_price': 160.0},  # Reduced
-            {'symbol': 'MSFT', 'weight': 0.4, 'share_price': 310.0},  # Increased
-            {'symbol': 'TSLA', 'weight': 0.2, 'share_price': 800.0},  # New
-            # GOOG is sold
+            {'symbol': 'AAPL', 'weight': 0.4, 'share_price': 160.0},  # Reduced.
+            {'symbol': 'MSFT', 'weight': 0.4, 'share_price': 310.0},  # Increased.
+            {'symbol': 'TSLA', 'weight': 0.2, 'share_price': 800.0},  # New.
+            # GOOG is implicitly sold as it's not in the new target.
         ])
         updated_history = rebalance(
             current_history,
@@ -76,7 +103,7 @@ class TestRebalance:
         assert len(updated_history) == 2
         entry = updated_history[1]
         assert entry['action'] == 'rebalance'
-        assert entry['date'] == '2021'
+        # Expected trades based on weight changes:
         # AAPL: 0.5 -> 0.4 (sell 0.1)
         # MSFT: 0.3 -> 0.4 (buy 0.1)
         # GOOG: 0.2 -> 0.0 (sell 0.2)
@@ -89,9 +116,10 @@ class TestRebalance:
         assert entry['value_bought'] == pytest.approx(expected_value_bought)
         expected_tx_cost = (expected_value_bought + expected_value_sold) * 0.001
         assert entry['transaction_cost'] == pytest.approx(expected_tx_cost)
-        assert len(entry['stocks']) == 3  # AAPL, MSFT, TSLA
+        assert len(entry['stocks']) == 3  # AAPL, MSFT, TSLA.
 
     def test_rebalance_to_cash(self, sample_portfolio_history_entry: Dict[str, Any]):
+        """Tests rebalancing the entire portfolio to a 100% cash position."""
         current_history = [sample_portfolio_history_entry]
         empty_target_stocks = pd.DataFrame(columns=['symbol', 'weight', 'share_price'])
         updated_history = rebalance(
@@ -103,13 +131,16 @@ class TestRebalance:
         assert len(updated_history) == 2
         entry = updated_history[1]
         assert entry['action'] == 'rebalance'
-        assert entry['stocks'] == []  # Rebalanced to cash
-        # All previous holdings (total weight 1.0) are sold
+        assert not entry['stocks']  # Portfolio should be empty (all cash).
+        # All previous holdings (total weight 1.0) are sold.
         assert entry['value_sold'] == pytest.approx(NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES * 1.0)
         assert entry['value_bought'] == 0.0
-        assert entry['transaction_cost'] == pytest.approx(NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES * 0.001)
+        assert entry['transaction_cost'] == pytest.approx(
+            NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES * 0.001
+        )
 
     def test_rebalance_from_cash(self, sample_target_stocks_df: pd.DataFrame):
+        """Tests rebalancing from a 100% cash position to holding stocks."""
         cash_history_entry = {
             'date': '2020',
             'stocks': [{'symbol': 'CASH', 'weight': 1.0, 'share_price': 1.0, 'annual_return': 0.0}],
@@ -125,14 +156,19 @@ class TestRebalance:
         assert len(updated_history) == 2
         entry = updated_history[1]
         assert entry['action'] == 'rebalance'
-        # All target stocks (total weight 1.0) are bought
+        # All target stocks (total weight 1.0) are bought.
         assert entry['value_bought'] == pytest.approx(NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES)
-        assert entry['value_sold'] == 0.0 # Selling CASH is not counted in value_sold for turnover
-        assert entry['transaction_cost'] == pytest.approx(NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES * 0.001)
+        assert entry['value_sold'] == 0.0  # Selling CASH is not counted in value_sold for turnover.
+        assert entry['transaction_cost'] == pytest.approx(
+            NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES * 0.001
+        )
 
-    def test_dynamic_rebalance_no_change(self, sample_portfolio_history_entry: Dict[str, Any]):
+    def test_dynamic_rebalance_no_change(
+        self, sample_portfolio_history_entry: Dict[str, Any]
+    ):
+        """Tests dynamic rebalance when no significant weight deviation occurs."""
         current_history = [sample_portfolio_history_entry]
-        # Target stocks are identical to current holdings
+        # Target stocks are identical to current holdings.
         target_stocks_no_change = pd.DataFrame(sample_portfolio_history_entry['stocks'])
         updated_history = rebalance(
             current_history,
@@ -150,12 +186,15 @@ class TestRebalance:
         assert entry['transaction_cost'] == 0.0
         assert entry['stocks'] == sample_portfolio_history_entry['stocks']
 
-    def test_dynamic_rebalance_triggered_by_deviation(self, sample_portfolio_history_entry: Dict[str, Any]):
+    def test_dynamic_rebalance_triggered_by_deviation(
+        self, sample_portfolio_history_entry: Dict[str, Any]
+    ):
+        """Tests dynamic rebalance triggered by a significant weight deviation."""
         current_history = [sample_portfolio_history_entry]  # AAPL:0.5, MSFT:0.3, GOOG:0.2
         target_stocks_deviated = pd.DataFrame([
-            {'symbol': 'AAPL', 'weight': 0.3, 'share_price': 150.0, 'annual_return': 10.0},  # Deviated by 0.2 (>0.05)
-            {'symbol': 'MSFT', 'weight': 0.5, 'share_price': 300.0, 'annual_return': 5.0},  # Deviated by 0.2
-            {'symbol': 'GOOG', 'weight': 0.2, 'share_price': 2500.0, 'annual_return': 15.0},  # No change
+            {'symbol': 'AAPL', 'weight': 0.3, 'share_price': 150.0, 'annual_return': 10.0},  # Deviated by 0.2 (>0.05).
+            {'symbol': 'MSFT', 'weight': 0.5, 'share_price': 300.0, 'annual_return': 5.0},  # Deviated by 0.2.
+            {'symbol': 'GOOG', 'weight': 0.2, 'share_price': 2500.0, 'annual_return': 15.0},  # No change.
         ])
         updated_history = rebalance(
             current_history,
@@ -168,15 +207,18 @@ class TestRebalance:
         assert len(updated_history) == 2
         entry = updated_history[1]
         assert entry['action'] == 'rebalance'
-        assert entry['value_bought'] > 0  # MSFT bought
-        assert entry['value_sold'] > 0  # AAPL sold
+        assert entry['value_bought'] > 0  # MSFT bought.
+        assert entry['value_sold'] > 0  # AAPL sold.
 
-    def test_dynamic_rebalance_triggered_by_new_stock(self, sample_portfolio_history_entry: Dict[str, Any]):
+    def test_dynamic_rebalance_triggered_by_new_stock(
+        self, sample_portfolio_history_entry: Dict[str, Any]
+    ):
+        """Tests dynamic rebalance triggered by adding a new stock to the target."""
         current_history = [sample_portfolio_history_entry]
         target_stocks_new = pd.DataFrame([
             {'symbol': 'AAPL', 'weight': 0.5, 'share_price': 150.0, 'annual_return': 10.0},
             {'symbol': 'MSFT', 'weight': 0.3, 'share_price': 300.0, 'annual_return': 5.0},
-            {'symbol': 'TSLA', 'weight': 0.2, 'share_price': 800.0, 'annual_return': 20.0},  # New stock, GOOG removed
+            {'symbol': 'TSLA', 'weight': 0.2, 'share_price': 800.0, 'annual_return': 20.0},  # New stock, GOOG removed.
         ])
         updated_history = rebalance(
             current_history,
@@ -190,12 +232,15 @@ class TestRebalance:
         entry = updated_history[1]
         assert entry['action'] == 'rebalance'
 
-    def test_dynamic_rebalance_triggered_by_sold_stock(self, sample_portfolio_history_entry: Dict[str, Any]):
-        current_history = [sample_portfolio_history_entry]  # AAPL, MSFT, GOOG
+    def test_dynamic_rebalance_triggered_by_sold_stock(
+        self, sample_portfolio_history_entry: Dict[str, Any]
+    ):
+        """Tests dynamic rebalance triggered by selling an existing stock."""
+        current_history = [sample_portfolio_history_entry]  # AAPL, MSFT, GOOG.
         target_stocks_sold = pd.DataFrame([
             {'symbol': 'AAPL', 'weight': 0.7, 'share_price': 150.0, 'annual_return': 10.0},
             {'symbol': 'MSFT', 'weight': 0.3, 'share_price': 300.0, 'annual_return': 5.0},
-            # GOOG is sold (not in target)
+            # GOOG is sold (not in target).
         ])
         updated_history = rebalance(
             current_history,
@@ -210,7 +255,10 @@ class TestRebalance:
         assert entry['action'] == 'rebalance'
 
     @patch('click.echo')
-    def test_rebalance_target_weights_sum_zero(self, mock_click_echo, sample_portfolio_history_entry: Dict[str, Any]):
+    def test_rebalance_target_weights_sum_zero(
+        self, mock_click_echo, sample_portfolio_history_entry: Dict[str, Any]
+    ):
+        """Tests rebalance behavior when target stock weights sum to zero."""
         current_history = [sample_portfolio_history_entry]
         target_stocks_zero_weight = pd.DataFrame([
             {'symbol': 'AAPL', 'weight': 0.0, 'share_price': 150.0, 'annual_return': 10.0},
@@ -224,23 +272,25 @@ class TestRebalance:
         )
         mock_click_echo.assert_any_call(
             "Warning: Target stock weights for 2021 sum to zero or are invalid (0.0). "
-            "Assuming equal weighting for target stocks.",
+            "Assuming equal weighting.",
             err=True
         )
         entry = updated_history[1]
         assert len(entry['stocks']) == 2
-        # Check if weights were set to equal
+        # Check if weights were set to equal.
         total_weight_after_fallback = sum(s['weight'] for s in entry['stocks'])
         assert total_weight_after_fallback == pytest.approx(1.0)
         assert entry['stocks'][0]['weight'] == pytest.approx(0.5)
         assert entry['stocks'][1]['weight'] == pytest.approx(0.5)
 
     @patch('click.echo')
-    def test_rebalance_target_missing_share_price(self, mock_click_echo,
-                                                  sample_portfolio_history_entry: Dict[str, Any]):
+    def test_rebalance_target_missing_share_price(
+        self, mock_click_echo, sample_portfolio_history_entry: Dict[str, Any]
+    ):
+        """Tests rebalance behavior when target stocks are missing 'share_price'."""
         current_history = [sample_portfolio_history_entry]
         target_stocks_no_price = pd.DataFrame([
-            {'symbol': 'AAPL', 'weight': 1.0, 'annual_return': 10.0}, # Missing share_price
+            {'symbol': 'AAPL', 'weight': 1.0, 'annual_return': 10.0},  # Missing share_price.
         ])
         updated_history = rebalance(
             current_history,
@@ -256,10 +306,12 @@ class TestRebalance:
         assert entry['stocks'][0]['share_price'] == 1.0
 
 
-# --- Tests for calculate_metrics() ---
 @pytest.mark.unit
 class TestCalculateMetrics:
+    """Test suite for the `calculate_metrics` function."""
+
     def test_metrics_empty_history(self):
+        """Tests metrics calculation with an empty portfolio history."""
         metrics = calculate_metrics([])
         expected_zeros = {
             'sharpe_ratio': 0.0, 'max_drawdown': 0.0, 'sp500_comparison': 0.0,
@@ -269,26 +321,27 @@ class TestCalculateMetrics:
         assert metrics == expected_zeros
 
     def test_metrics_single_period_positive_return(self):
+        """Tests metrics calculation for a single period with positive returns."""
         portfolio_history = [
-            {'date': '2020', 'stocks': [], 'action': 'initial_investment', 'value_bought': 100, 'value_sold': 0,
-             'transaction_cost': 0.1},
-            {'date': '2021', 'stocks': [{'symbol': 'A', 'weight': 1.0, 'annual_return': 10.0}],  # 10% return
+            {'date': '2020', 'stocks': [], 'action': 'initial_investment',
+             'value_bought': 100, 'value_sold': 0, 'transaction_cost': 0.1},
+            {'date': '2021', 'stocks': [{'symbol': 'A', 'weight': 1.0, 'annual_return': 10.0}],  # 10% return.
              'action': 'rebalance', 'value_bought': 100, 'value_sold': 0, 'transaction_cost': 0.1}
         ]
         metrics = calculate_metrics(portfolio_history)
-        assert metrics['total_return'] == pytest.approx(10.0)  # (1 + 0.1) - 1 = 0.1
-        assert metrics['average_annual_return'] == pytest.approx(10.0)  # CAGR for 1 period
-        # Sharpe: (0.10 - 0.02) / std_dev. If std_dev is 0 (only one return), it's inf or specific handling.
-        # Current implementation: if std_dev is 0 and mean > risk_free, sharpe is inf.
+        assert metrics['total_return'] == pytest.approx(10.0)
+        assert metrics['average_annual_return'] == pytest.approx(10.0)  # CAGR for 1 period.
+        # Sharpe: (0.10 - 0.02) / std_dev. If std_dev is 0 (only one return), it's inf.
         assert metrics['sharpe_ratio'] == float('inf')
-        assert metrics['max_drawdown'] == 0.0  # No drawdown with one positive return
+        assert metrics['max_drawdown'] == 0.0  # No drawdown with one positive return.
         assert metrics['portfolio_size'] == 1
 
     def test_metrics_single_period_negative_return(self):
+        """Tests metrics calculation for a single period with negative returns."""
         portfolio_history = [
-            {'date': '2020', 'stocks': [], 'action': 'initial_investment', 'value_bought': 100, 'value_sold': 0,
-             'transaction_cost': 0.1},
-            {'date': '2021', 'stocks': [{'symbol': 'A', 'weight': 1.0, 'annual_return': -5.0}],  # -5% return
+            {'date': '2020', 'stocks': [], 'action': 'initial_investment',
+             'value_bought': 100, 'value_sold': 0, 'transaction_cost': 0.1},
+            {'date': '2021', 'stocks': [{'symbol': 'A', 'weight': 1.0, 'annual_return': -5.0}],  # -5% return.
              'action': 'rebalance', 'value_bought': 100, 'value_sold': 0, 'transaction_cost': 0.1}
         ]
         metrics = calculate_metrics(portfolio_history)
@@ -297,9 +350,10 @@ class TestCalculateMetrics:
         assert metrics['max_drawdown'] == pytest.approx(5.0)
 
     def test_metrics_multiple_periods_mixed_returns(self):
+        """Tests metrics calculation over multiple periods with mixed returns."""
         portfolio_history = [
-            {'date': '2019', 'stocks': [], 'action': 'initial_investment', 'value_bought': 100, 'value_sold': 0,
-             'transaction_cost': 0.1},
+            {'date': '2019', 'stocks': [], 'action': 'initial_investment',
+             'value_bought': 100, 'value_sold': 0, 'transaction_cost': 0.1},
             {'date': '2020', 'stocks': [{'symbol': 'A', 'weight': 1.0, 'annual_return': 10.0}],  # +10%
              'action': 'rebalance', 'value_bought': 10, 'value_sold': 0, 'transaction_cost': 0.01},
             {'date': '2021', 'stocks': [{'symbol': 'A', 'weight': 1.0, 'annual_return': -5.0}],  # -5%
@@ -314,122 +368,122 @@ class TestCalculateMetrics:
         metrics = calculate_metrics(portfolio_history)
         assert metrics['total_return'] == pytest.approx(25.4, abs=0.01)
         assert metrics['average_annual_return'] == pytest.approx(7.83, abs=0.01)
-        # Max drawdown: After +10%, then -5%. Value goes 1 -> 1.1 -> 1.045. Peak 1.1. Drawdown (1.045-1.1)/1.1 = -0.05/1.1 = -0.04545
-        assert metrics['max_drawdown'] == pytest.approx(5.0,
-                                                        abs=0.01)  # (1.1 -> 1.045) is a 5% drop from peak of 1.1 if we consider the values.
-        # The code calculates based on (1+r).cumprod()
-        # (1.1), (1.1*0.95=1.045). Peak = 1.1. Drawdown = (1.045-1.1)/1.1 = -0.05
-        # Wait, the drawdown is on the compounded growth.
-        # Growth factors: 1.1, 1.045, 1.254
-        # Peaks: 1.1, 1.1, 1.254
-        # Drawdowns: (1.1-1.1)/1.1=0, (1.045-1.1)/1.1 = -0.05, (1.254-1.254)/1.254=0. Min is -0.05. So 5%.
-        assert metrics['sharpe_ratio'] > 0  # Exact value depends on std dev
+        # Max drawdown calculation:
+        # Equity curve (factors): 1.0 (initial), 1.1, 1.045, 1.254
+        # Peaks: 1.0, 1.1, 1.1, 1.254
+        # Drawdowns: 0, (1.045-1.1)/1.1 = -0.05, 0. Min is -0.05. So 5%.
+        assert metrics['max_drawdown'] == pytest.approx(5.0, abs=0.01)
+        assert metrics['sharpe_ratio'] > 0  # Exact value depends on std dev.
 
     def test_metrics_zero_volatility_sharpe(self):
-        # Case 1: Returns > risk-free rate
+        """Tests Sharpe ratio calculation in scenarios with zero volatility."""
+        # Case 1: Returns > risk-free rate (ANNUAL_RISK_FREE_RATE = 0.02).
         portfolio_history_gt_rf = [
-            {'date': '2019', 'stocks': [], 'action': 'initial_investment', 'value_bought': 0, 'value_sold': 0,
-             'transaction_cost': 0},
-            {'date': '2020', 'stocks': [{'symbol': 'A', 'weight': 1.0, 'annual_return': 5.0}], 'action': 'rebalance',
+            {'date': '2019', 'stocks': [], 'action': 'initial_investment',
              'value_bought': 0, 'value_sold': 0, 'transaction_cost': 0},
-            {'date': '2021', 'stocks': [{'symbol': 'A', 'weight': 1.0, 'annual_return': 5.0}], 'action': 'rebalance',
-             'value_bought': 0, 'value_sold': 0, 'transaction_cost': 0}
-        ]  # Periodic returns: 0.05, 0.05. ANNUAL_RISK_FREE_RATE = 0.02
+            {'date': '2020', 'stocks': [{'symbol': 'A', 'weight': 1.0, 'annual_return': 5.0}],
+             'action': 'rebalance', 'value_bought': 0, 'value_sold': 0, 'transaction_cost': 0},
+            {'date': '2021', 'stocks': [{'symbol': 'A', 'weight': 1.0, 'annual_return': 5.0}],
+             'action': 'rebalance', 'value_bought': 0, 'value_sold': 0, 'transaction_cost': 0}
+        ]  # Periodic returns: 0.05, 0.05.
         metrics_gt_rf = calculate_metrics(portfolio_history_gt_rf)
         assert metrics_gt_rf['sharpe_ratio'] == float('inf')
 
-        # Case 2: Returns == risk-free rate
+        # Case 2: Returns == risk-free rate.
         portfolio_history_eq_rf = [
-            {'date': '2019', 'stocks': [], 'action': 'initial_investment', 'value_bought': 0, 'value_sold': 0,
-             'transaction_cost': 0},
-            {'date': '2020', 'stocks': [{'symbol': 'A', 'weight': 1.0, 'annual_return': 2.0}], 'action': 'rebalance',
+            {'date': '2019', 'stocks': [], 'action': 'initial_investment',
              'value_bought': 0, 'value_sold': 0, 'transaction_cost': 0},
-            {'date': '2021', 'stocks': [{'symbol': 'A', 'weight': 1.0, 'annual_return': 2.0}], 'action': 'rebalance',
-             'value_bought': 0, 'value_sold': 0, 'transaction_cost': 0}
-        ]  # Periodic returns: 0.02, 0.02
+            {'date': '2020', 'stocks': [{'symbol': 'A', 'weight': 1.0, 'annual_return': 2.0}],
+             'action': 'rebalance', 'value_bought': 0, 'value_sold': 0, 'transaction_cost': 0},
+            {'date': '2021', 'stocks': [{'symbol': 'A', 'weight': 1.0, 'annual_return': 2.0}],
+             'action': 'rebalance', 'value_bought': 0, 'value_sold': 0, 'transaction_cost': 0}
+        ]  # Periodic returns: 0.02, 0.02.
         metrics_eq_rf = calculate_metrics(portfolio_history_eq_rf)
-        assert metrics_eq_rf['sharpe_ratio'] == 0.0  # (0.02 - 0.02) / 0 = 0
+        assert metrics_eq_rf['sharpe_ratio'] == 0.0  # (0.02 - 0.02) / 0 = 0.
 
-        # Case 3: Returns < risk-free rate
+        # Case 3: Returns < risk-free rate.
         portfolio_history_lt_rf = [
-            {'date': '2019', 'stocks': [], 'action': 'initial_investment', 'value_bought': 0, 'value_sold': 0,
-             'transaction_cost': 0},
-            {'date': '2020', 'stocks': [{'symbol': 'A', 'weight': 1.0, 'annual_return': 1.0}], 'action': 'rebalance',
+            {'date': '2019', 'stocks': [], 'action': 'initial_investment',
              'value_bought': 0, 'value_sold': 0, 'transaction_cost': 0},
-            {'date': '2021', 'stocks': [{'symbol': 'A', 'weight': 1.0, 'annual_return': 1.0}], 'action': 'rebalance',
-             'value_bought': 0, 'value_sold': 0, 'transaction_cost': 0}
-        ]  # Periodic returns: 0.01, 0.01
+            {'date': '2020', 'stocks': [{'symbol': 'A', 'weight': 1.0, 'annual_return': 1.0}],
+             'action': 'rebalance', 'value_bought': 0, 'value_sold': 0, 'transaction_cost': 0},
+            {'date': '2021', 'stocks': [{'symbol': 'A', 'weight': 1.0, 'annual_return': 1.0}],
+             'action': 'rebalance', 'value_bought': 0, 'value_sold': 0, 'transaction_cost': 0}
+        ]  # Periodic returns: 0.01, 0.01.
         metrics_lt_rf = calculate_metrics(portfolio_history_lt_rf)
         assert metrics_lt_rf['sharpe_ratio'] == 0.0  # (0.01 - 0.02) / 0, but excess return is negative.
 
     def test_ptr_calculation(self):
-        # Scenario 1: Only initial investment, no rebalances
+        """Tests Portfolio Turnover Ratio (PTR) calculation."""
+        # Scenario 1: Only initial investment, no rebalances.
         history1 = [
             {'date': '2020', 'stocks': [], 'action': 'initial_investment',
              'value_bought': NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES, 'value_sold': 0, 'transaction_cost': 10}
         ]
         metrics1 = calculate_metrics(history1)
-        assert metrics1['turnover_ratio'] == 0.0  # Initial investment not counted in this PTR def
+        assert metrics1['turnover_ratio'] == 0.0  # Initial investment not counted in this PTR def.
 
-        # Scenario 2: One rebalance
+        # Scenario 2: One rebalance.
         history2 = [
-            {'date': '2020', 'stocks': [], 'action': 'initial_investment', 'value_bought': NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES,
-            'value_sold': 0, 'transaction_cost': 10},
-        {'date': '2021', 'stocks': [], 'action': 'rebalance',
-         'value_bought': 0.2 * NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES,  # 200k
-         'value_sold': 0.3 * NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES,  # 300k
-         'transaction_cost': 5}
-        ]  # Turnover for event = min(200k, 300k) = 200k. PTR = (200k / 1M) * 100 = 20%
+            {'date': '2020', 'stocks': [], 'action': 'initial_investment',
+             'value_bought': NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES, 'value_sold': 0, 'transaction_cost': 10},
+            {'date': '2021', 'stocks': [], 'action': 'rebalance',
+             'value_bought': 0.2 * NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES,  # 200k
+             'value_sold': 0.3 * NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES,  # 300k
+             'transaction_cost': 5}
+        ]  # Turnover for event = min(200k, 300k) = 200k. PTR = (200k / 1M) * 100 = 20%.
         metrics2 = calculate_metrics(history2)
         assert metrics2['turnover_ratio'] == pytest.approx(20.0)
 
-        # Scenario 3: Multiple rebalances
+        # Scenario 3: Multiple rebalances.
         history3 = [
-            {'date': '2020', 'stocks': [], 'action': 'initial_investment', 'value_bought': NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES,
-            'value_sold': 0, 'transaction_cost': 10},
-        {'date': '2021', 'stocks': [], 'action': 'rebalance',
-         'value_bought': 0.2 * NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES,
-         'value_sold': 0.3 * NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES, 'transaction_cost': 5},  # PTR_event1 = 0.2
-        {'date': '2022', 'stocks': [], 'action': 'hold', 'value_bought': 0, 'value_sold': 0,
-         'transaction_cost': 0},  # No turnover
-        {'date': '2023', 'stocks': [], 'action': 'rebalance',
-         'value_bought': 0.4 * NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES,
-         'value_sold': 0.1 * NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES, 'transaction_cost': 3}  # PTR_event2 = 0.1
-        ]  # Avg PTR = ((0.2 + 0.1) / 2) * 100 = 15%
+            {'date': '2020', 'stocks': [], 'action': 'initial_investment',
+             'value_bought': NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES, 'value_sold': 0, 'transaction_cost': 10},
+            {'date': '2021', 'stocks': [], 'action': 'rebalance',
+             'value_bought': 0.2 * NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES,
+             'value_sold': 0.3 * NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES, 'transaction_cost': 5},  # PTR_event1 = 0.2.
+            {'date': '2022', 'stocks': [], 'action': 'hold',
+             'value_bought': 0, 'value_sold': 0, 'transaction_cost': 0},  # No turnover.
+            {'date': '2023', 'stocks': [], 'action': 'rebalance',
+             'value_bought': 0.4 * NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES,
+             'value_sold': 0.1 * NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES, 'transaction_cost': 3}  # PTR_event2 = 0.1.
+        ]  # Avg PTR = ((0.2 + 0.1) / 2) * 100 = 15%.
         metrics3 = calculate_metrics(history3)
         assert metrics3['turnover_ratio'] == pytest.approx(15.0)
 
     def test_transaction_cost_metric(self):
+        """Tests the calculation of total transaction costs as a percentage."""
         history = [
-            {'date': '2020', 'stocks': [], 'action': 'initial_investment', 'value_bought': NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES,
-            'value_sold': 0, 'transaction_cost': 1000},
-        {'date': '2021', 'stocks': [], 'action': 'rebalance', 'value_bought': 200_000, 'value_sold': 300_000,
-         'transaction_cost': 500},  # Cost for this rebalance
-        {'date': '2022', 'stocks': [], 'action': 'rebalance', 'value_bought': 100_000, 'value_sold': 50_000,
-         'transaction_cost': 150}  # Cost for this rebalance
+            {'date': '2020', 'stocks': [], 'action': 'initial_investment',
+             'value_bought': NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES, 'value_sold': 0, 'transaction_cost': 1000},
+            {'date': '2021', 'stocks': [], 'action': 'rebalance',
+             'value_bought': 200_000, 'value_sold': 300_000, 'transaction_cost': 500},  # Cost for this rebalance.
+            {'date': '2022', 'stocks': [], 'action': 'rebalance',
+             'value_bought': 100_000, 'value_sold': 50_000, 'transaction_cost': 150}  # Cost for this rebalance.
         ]
-        # Num rebalance events = 2
-        # Total monetary costs from rebalances = 500 + 150 = 650
-        # Avg cost % = (650 / (2 * 1_000_000)) * 100 = (650 / 2_000_000) * 100 = 0.000325 * 100 = 0.0325%
+        # Num rebalance events = 2.
+        # Total monetary costs from rebalances = 500 + 150 = 650.
+        # Avg cost % = (650 / (2 * 1_000_000)) * 100 = (650 / 2_000_000) * 100 = 0.000325 * 100 = 0.0325%.
         metrics = calculate_metrics(history)
         assert metrics['transaction_costs_total'] == pytest.approx(0.0325)
 
     def test_metrics_with_cash_periods(self):
+        """Tests metrics calculation when the portfolio holds cash for some periods."""
         portfolio_history = [
-            {'date': '2019', 'stocks': [], 'action': 'initial_investment', 'value_bought': 100, 'value_sold': 0,
-             'transaction_cost': 0.1},
+            {'date': '2019', 'stocks': [], 'action': 'initial_investment',
+             'value_bought': 100, 'value_sold': 0, 'transaction_cost': 0.1},
             {'date': '2020', 'stocks': [{'symbol': 'A', 'weight': 1.0, 'annual_return': 10.0}],  # +10%
              'action': 'rebalance', 'value_bought': 10, 'value_sold': 0, 'transaction_cost': 0.01},
-            {'date': '2021', 'stocks': [{'symbol': 'CASH', 'weight': 1.0, 'annual_return': 0.0}],  # 0% (cash)
+            {'date': '2021', 'stocks': [{'symbol': 'CASH', 'weight': 1.0, 'annual_return': 0.0}],  # 0% (cash).
              'action': 'rebalance', 'value_bought': 0, 'value_sold': 0, 'transaction_cost': 0},
             {'date': '2022', 'stocks': [{'symbol': 'B', 'weight': 1.0, 'annual_return': 5.0}],  # +5%
              'action': 'rebalance', 'value_bought': 20, 'value_sold': 0, 'transaction_cost': 0.02}
         ]
-        # Returns: 0.10, 0.0, 0.05
-        # Total growth: (1.10) * (1.0) * (1.05) = 1.155
-        # Total return: 1.155 - 1 = 0.155 (15.5%)
-        # CAGR: (1.155)**(1/3) - 1 = 0.049205... (4.92%)
+        # Returns: 0.10, 0.0, 0.05.
+        # Total growth: (1.10) * (1.0) * (1.05) = 1.155.
+        # Total return: 1.155 - 1 = 0.155 (15.5%).
+        # CAGR: (1.155)**(1/3) - 1 = 0.049205... (4.92%).
         metrics = calculate_metrics(portfolio_history)
         assert metrics['total_return'] == pytest.approx(15.5, abs=0.01)
         assert metrics['average_annual_return'] == pytest.approx(4.92, abs=0.01)
-        assert metrics['portfolio_size'] == 1  # Final portfolio has stock B
+        assert metrics['portfolio_size'] == 1  # Final portfolio has stock B.

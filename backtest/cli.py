@@ -4,8 +4,6 @@ This module provides a CLI for running backtests on various investment
 strategies, listing available strategies, and managing data inputs and outputs.
 It uses the Click library to define commands and options.
 """
-
-
 # Standard library imports
 from datetime import datetime
 import traceback
@@ -49,9 +47,31 @@ def _perform_backtest_core_logic(
     include_delisted: bool,
     rebalance_frequency: str
 ) -> Tuple[Dict[str, float], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any], str]:
-    """
-    Performs the core logic of the backtest.
-    Returns metrics, yearly returns, portfolio history, CLI params, and strategy description.
+    """Performs the core logic of the backtest.
+
+    Args:
+        strategy_name: The name of the strategy to run.
+        data_file_path: Path to the CSV or JSON file containing market data.
+        start_year: The start year of the backtest period.
+        end_year: The end year of the backtest period.
+        growth_threshold: Minimum annual sales growth threshold.
+        top_n: Number of top companies to include.
+        hybrid_weighting: Whether to use hybrid weighting.
+        dynamic_rebalance: Whether to enable dynamic rebalancing.
+        risk_overlay: Whether to reduce exposure based on P/S ratio.
+        ps_threshold: P/S ratio threshold for the risk overlay.
+        transaction_cost: Transaction cost as a slippage percentage.
+        stress_test: Specific stress test scenario to run.
+        include_delisted: Whether to include delisted companies.
+        rebalance_frequency: Portfolio rebalancing frequency.
+
+    Returns:
+        A tuple containing:
+            - final_performance_metrics: Dictionary of performance metrics.
+            - yearly_display_returns: List of yearly return information.
+            - portfolio_history: List of portfolio states over time.
+            - strategy_cli_params: Dictionary of CLI parameters used for the strategy.
+            - strategy_description: Description of the executed strategy.
     """
     strategy_description = get_strategy_description(strategy_name) or f"Strategy '{strategy_name}'"
     click.echo(f"Running backtest for: {strategy_description}")
@@ -106,7 +126,29 @@ def _run_strategy_backtest(
             output: Optional[str],
             benchmark: str
     ) -> int:
-    """Runs a generic backtest for the specified investment strategy."""
+    """Runs a generic backtest for the specified investment strategy.
+
+    Args:
+        strategy_name: The name of the strategy to run.
+        data_file_path: Path to the CSV or JSON file containing market data.
+        start_year: The start year of the backtest period.
+        end_year: The end year of the backtest period.
+        growth_threshold: Minimum annual sales growth threshold.
+        top_n: Number of top companies to include.
+        hybrid_weighting: Whether to use hybrid weighting.
+        dynamic_rebalance: Whether to enable dynamic rebalancing.
+        risk_overlay: Whether to reduce exposure based on P/S ratio.
+        ps_threshold: P/S ratio threshold for the risk overlay.
+        transaction_cost: Transaction cost as a slippage percentage.
+        stress_test: Specific stress test scenario to run.
+        include_delisted: Whether to include delisted companies.
+        rebalance_frequency: Portfolio rebalancing frequency.
+        output: Optional output file for detailed results (JSON or CSV).
+        benchmark: Benchmark symbol for comparison.
+
+    Returns:
+        An exit code (0 for success, 1 for failure).
+    """
     try:
         if not validate_strategy(strategy_name):
             click.echo(f"Error: Strategy '{strategy_name}' not found.", err=True)
@@ -149,14 +191,14 @@ def _run_strategy_backtest(
     except ValueError as e:
         click.echo(f"Error: Invalid value or configuration. {e}", err=True)
         return 1
-    except IOError as e: # Catches file save error from format_and_output_results
+    except IOError as e:  # Catches file save error from format_and_output_results
         click.echo(f"Error writing output file: {e}", err=True)
         return 1
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-except
         if DEBUG:
-            # Log the full traceback for an unexpected error
+            # Log the full traceback for an unexpected error.
             click.echo("An unexpected error occurred. Full traceback:", err=True)
-            click.echo(traceback.format_exc(), err=True)  # Log the full traceback
+            click.echo(traceback.format_exc(), err=True)
         else:
             click.echo(
                 f"An unexpected error occurred during the backtest: {type(e).__name__} - {e}",
@@ -175,23 +217,38 @@ def _process_single_period_backtest(
         dynamic_rebalance: bool,
         transaction_cost: float
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """
-    Processes a single period (year) of the backtest.
-    Returns updated portfolio history and display returns for the period.
+    """Processes a single period (year) of the backtest.
+
+    Args:
+        year: The current year to process.
+        full_market_data: DataFrame containing all market data.
+        strategy_name: The name of the strategy being executed.
+        strategy_cli_params: CLI parameters relevant to the strategy.
+        current_portfolio_history: The portfolio history up to the previous period.
+        rebalance_frequency: The frequency of rebalancing.
+        dynamic_rebalance: Flag indicating if dynamic rebalancing is active.
+        transaction_cost: The transaction cost rate.
+
+    Returns:
+        A tuple containing:
+            - updated_portfolio_history: The portfolio history including the current period.
+            - period_display_return_info: Dictionary with return info for the current period.
     """
     click.echo(f"Processing year {year}...")
     period_date_str = str(year)
     current_year_data = full_market_data[full_market_data['year'] == year].copy()
 
     period_display_return_info = {'year': year, 'return': 0.0}
-    # Work with a mutable copy of the history for this period's processing
+    # Work with a mutable copy of the history for this period's processing.
     updated_portfolio_history = list(current_portfolio_history)
 
     if current_year_data.empty:
         click.echo(f"Warning: No data available for {year}. Skipping rebalance.", err=True)
         if updated_portfolio_history:
-            # Calculate return based on the last known portfolio state
-            period_display_return_info['return'] = calculate_portfolio_entry_return(updated_portfolio_history[-1])
+            # Calculate return based on the last known portfolio state.
+            period_display_return_info['return'] = calculate_portfolio_entry_return(
+                updated_portfolio_history[-1]
+            )
         return updated_portfolio_history, period_display_return_info
 
     strategy_output = execute_strategy(
@@ -227,10 +284,10 @@ def _process_single_period_backtest(
                 history=updated_portfolio_history,
                 target_stocks_df=cash_portfolio_df,
                 current_year_str=period_date_str,
-                dynamic_rebalance_active=False,  # Force rebalance to CASH
+                dynamic_rebalance_active=False,  # Force rebalance to CASH.
                 transaction_cost_rate=transaction_cost
             )
-        # Covers initial investment (history is empty) or when target is not empty
+        # Covers initial investment (history is empty) or when target is not empty.
         elif not target_portfolio_for_period.empty or not updated_portfolio_history:
             updated_portfolio_history = rebalance(
                 history=updated_portfolio_history,
@@ -239,12 +296,15 @@ def _process_single_period_backtest(
                 dynamic_rebalance_active=dynamic_rebalance,
                 transaction_cost_rate=transaction_cost
             )
-        # If target_portfolio_for_period is empty and history is also empty (initial investment to CASH)
-        # it's covered by the elif above, as target_portfolio_for_period would have been set to CASH df.
+        # If target_portfolio_for_period is empty and history is also empty
+        # (initial investment to CASH), it's covered by the elif above,
+        # as target_portfolio_for_period would have been set to CASH df.
 
-    # Calculate display return for the current period based on the *newly updated* history
+    # Calculate display return for the current period based on the *newly updated* history.
     if updated_portfolio_history:
-        period_display_return_info['return'] = calculate_portfolio_entry_return(updated_portfolio_history[-1])
+        period_display_return_info['return'] = calculate_portfolio_entry_return(
+            updated_portfolio_history[-1]
+        )
 
     return updated_portfolio_history, period_display_return_info
 
@@ -259,7 +319,23 @@ def _execute_backtest_loop(
         dynamic_rebalance: bool,
         transaction_cost: float
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Executes the main annual backtesting loop."""
+    """Executes the main annual backtesting loop.
+
+    Args:
+        start_year: The start year of the backtest.
+        end_year: The end year of the backtest.
+        full_market_data: DataFrame containing all market data for the backtest period.
+        strategy_name: The name of the strategy to execute.
+        strategy_cli_params: CLI parameters for the strategy.
+        rebalance_frequency: The frequency of rebalancing.
+        dynamic_rebalance: Flag for dynamic rebalancing.
+        transaction_cost: Transaction cost rate.
+
+    Returns:
+        A tuple containing:
+            - portfolio_history: The history of portfolio states.
+            - yearly_display_returns: List of yearly return information.
+    """
     portfolio_history: List[Dict[str, Any]] = []
     yearly_display_returns: List[Dict[str, Any]] = []
 
@@ -269,7 +345,7 @@ def _execute_backtest_loop(
             full_market_data,
             strategy_name,
             strategy_cli_params,
-            portfolio_history, # Pass current history
+            portfolio_history,  # Pass current history.
             rebalance_frequency,
             dynamic_rebalance,
             transaction_cost
@@ -288,7 +364,7 @@ def cli():
     Provides commands to list available strategies and run backtests.
     Use 'backtest run --help' for detailed options on running a backtest.
     """
-    pass  # Click manages context
+    pass  # Click manages context.
 
 
 @cli.command(name="run")
@@ -300,7 +376,7 @@ def cli():
 )
 @click.option(
     "--start-year", "-s",
-    default=lambda: datetime.now().year - 10 - 1,  # Default start for a 10-year period ending last year.
+    default=lambda: datetime.now().year - 10 - 1,
     type=int,
     show_default="current year - 11",
     help="Start year of the backtest period."
@@ -381,18 +457,23 @@ def cli():
 )
 @click.option(
     "--benchmark", "-b",
-    default="SPY",  # Common S&P 500 ETF ticker
+    default="SPY",  # Common S&P 500 ETF ticker.
     show_default=True,
     help="Metrics: Benchmark symbol for performance comparison (e.g., SPY)."
 )
 @click.pass_context
 def run_command(ctx: click.Context, **kwargs: Any):
-    """Runs a backtest for the specified STRATEGY using DATA_FILE."""
+    """Runs a backtest for the specified STRATEGY using DATA_FILE.
+
+    Args:
+        ctx: The Click context object.
+        **kwargs: Keyword arguments containing all CLI options and arguments.
+    """
     if kwargs['start_year'] > kwargs['end_year']:
         click.echo("Error: start_year cannot be greater than end_year.", err=True)
         ctx.exit(1)
     exit_code = _run_strategy_backtest(**kwargs)
-    ctx.exit(exit_code)  # Use ctx.exit for consistency
+    ctx.exit(exit_code)
 
 
 @cli.command(name="list")
@@ -403,7 +484,7 @@ def list_strategies_command():
         click.echo("No investment strategies found.")
         return
 
-    # Sort the list of strategies alphabetically by name
+    # Sort the list of strategies alphabetically by name.
     sorted_strategies_list = sorted(strategies_list, key=lambda s: s.get('name', '').lower())
 
     click.echo("Available investment strategies:")
@@ -416,4 +497,4 @@ def list_strategies_command():
 
 if __name__ == "__main__":
     # The pylint disable is for Click's way of handling parameters.
-    cli() # pylint: disable=no-value-for-parameter
+    cli()  # pylint: disable=no-value-for-parameter

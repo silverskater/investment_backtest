@@ -1,5 +1,7 @@
-"""
-Shared constants for the Investment Strategy Backtest Tool.
+"""Shared constants for the Investment Strategy Backtest Tool.
+
+This module defines constants used across the backtesting application,
+such as default values for financial calculations and operational flags.
 """
 
 # Notional portfolio value for calculating monetary buys/sells from weights.
@@ -16,7 +18,7 @@ DEFAULT_TRANSACTION_COST: float = 0.005
 # Default deviation threshold for dynamic rebalancing.
 DEFAULT_DEVIATION_THRESHOLD: float = 0.05
 
-# Global DEBUG flag
+# Global DEBUG flag.
 # Set to True to enable more verbose error logging, like full tracebacks.
 # Set to False for production or normal operation.
 DEBUG: bool = False
