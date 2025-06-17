@@ -3,14 +3,16 @@ import pandas as pd
 import json
 
 from typing import List, Dict, Any
-from unittest.mock import patch  # For mocking click.echo if needed
+from unittest.mock import patch  # For mocking click.echo
 
-from backtest.cli import (
-    rebalance,
-    calculate_metrics,
-    load_market_data,
-    NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES,
-    DEFAULT_TRANSACTION_COST
+from backtest.utils.metrics_calculator import calculate_metrics
+from backtest.utils.rebalance import rebalance
+# noinspection PyProtectedMember
+from backtest.utils.data_loader import _load_market_data  # pylint: disable=protected-access
+
+from backtest.constants import (
+    DEFAULT_TRANSACTION_COST,
+    NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES
 )
 
 
@@ -437,14 +439,14 @@ class TestCalculateMetrics:
         assert metrics['portfolio_size'] == 1  # Final portfolio has stock B
 
 
-# --- Tests for load_market_data() ---
+# --- Tests for _load_market_data() ---
 @pytest.mark.unit
 class TestLoadMarketData:
     def test_load_valid_csv(self, tmp_path):
         file_path = tmp_path / "data.csv"
         data = {'col1': [1, 2], 'col2': ['a', 'b']}
         pd.DataFrame(data).to_csv(file_path, index=False)
-        df = load_market_data(str(file_path))
+        df = _load_market_data(str(file_path))
         assert isinstance(df, pd.DataFrame)
         assert df.shape == (2, 2)
         assert list(df.columns) == ['col1', 'col2']
@@ -454,33 +456,33 @@ class TestLoadMarketData:
         data = [{'col1': 1, 'col2': 'a'}, {'col1': 2, 'col2': 'b'}]
         with open(file_path, 'w') as f:
             json.dump(data, f)
-        df = load_market_data(str(file_path))
+        df = _load_market_data(str(file_path))
         assert isinstance(df, pd.DataFrame)
         assert df.shape == (2, 2)
         assert set(df.columns) == {'col1', 'col2'}  # Order might not be preserved from list of dicts
 
     def test_load_file_not_found(self):
         with pytest.raises(FileNotFoundError, match="Data file not found: nonexistent.csv"):
-            load_market_data("nonexistent.csv")
+            _load_market_data("nonexistent.csv")
 
     def test_load_unsupported_extension(self, tmp_path):
         file_path = tmp_path / "data.txt"
         file_path.write_text("some data")
         with pytest.raises(ValueError, match="Unsupported file format: '.txt'"):
-            load_market_data(str(file_path))
+            _load_market_data(str(file_path))
 
     def test_load_corrupt_json(self, tmp_path):
         file_path = tmp_path / "data.json"
         file_path.write_text("{'col1': 1, 'col2': 'a'")  # Malformed JSON
         with pytest.raises(ValueError, match="Error decoding JSON"):
-            load_market_data(str(file_path))
+            _load_market_data(str(file_path))
 
     @patch('click.echo')  # To capture the warning
     def test_load_empty_csv(self, mock_click_echo, tmp_path):
         # Test CSV with headers but no data rows
         file_path_headers_only = tmp_path / "empty_with_headers.csv"
         pd.DataFrame(columns=['h1', 'h2']).to_csv(file_path_headers_only, index=False)
-        df_headers_only = load_market_data(str(file_path_headers_only))
+        df_headers_only = _load_market_data(str(file_path_headers_only))
         assert df_headers_only.empty
         assert list(df_headers_only.columns) == ['h1', 'h2']
         mock_click_echo.assert_not_called()  # No warning for this case
@@ -489,7 +491,7 @@ class TestLoadMarketData:
         file_path_truly_empty = tmp_path / "truly_empty.csv"
         file_path_truly_empty.write_text("")  # Creates an empty file
 
-        df_truly_empty = load_market_data(str(file_path_truly_empty))
+        df_truly_empty = _load_market_data(str(file_path_truly_empty))
         assert df_truly_empty.empty
         assert list(df_truly_empty.columns) == []  # Should have no columns
         mock_click_echo.assert_any_call(
@@ -501,5 +503,5 @@ class TestLoadMarketData:
         file_path = tmp_path / "empty.json"
         with open(file_path, 'w') as f:
             json.dump([], f)  # JSON file with an empty list
-        df = load_market_data(str(file_path))
+        df = _load_market_data(str(file_path))
         assert df.empty
