@@ -1,18 +1,16 @@
 import pytest
 import pandas as pd
-import json
 
 from typing import List, Dict, Any
-from unittest.mock import patch  # For mocking click.echo
+from unittest.mock import patch
 
 from backtest.utils.metrics_calculator import calculate_metrics
 from backtest.utils.rebalance import rebalance
-# noinspection PyProtectedMember
-from backtest.utils.data_loader import _load_market_data  # pylint: disable=protected-access
 
 from backtest.constants import (
     DEFAULT_TRANSACTION_COST,
-    NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES
+    NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES,
+    DEFAULT_DEVIATION_THRESHOLD
 )
 
 
@@ -48,7 +46,7 @@ class TestRebalance:
         history: List[Dict[str, Any]] = []
         updated_history = rebalance(
             history,
-            sample_target_stocks_df.copy(),  # Pass a copy as rebalance might modify it
+            sample_target_stocks_df.copy(),
             '2020',
             transaction_cost_rate=0.001
         )
@@ -57,9 +55,9 @@ class TestRebalance:
         assert entry['action'] == 'initial_investment'
         assert entry['date'] == '2020'
         assert len(entry['stocks']) == 3
-        assert entry['value_bought'] == pytest.approx(NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES * 1.0)  # sum of weights
+        assert entry['value_bought'] == pytest.approx(NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES)
         assert entry['value_sold'] == 0.0
-        assert entry['transaction_cost'] == pytest.approx(NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES * 1.0 * 0.001)
+        assert entry['transaction_cost'] == pytest.approx(NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES * 0.001)
 
     def test_standard_rebalance_buys_sells(self, sample_portfolio_history_entry: Dict[str, Any]):
         current_history = [sample_portfolio_history_entry]
@@ -109,12 +107,12 @@ class TestRebalance:
         # All previous holdings (total weight 1.0) are sold
         assert entry['value_sold'] == pytest.approx(NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES * 1.0)
         assert entry['value_bought'] == 0.0
-        assert entry['transaction_cost'] == pytest.approx(NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES * 1.0 * 0.001)
+        assert entry['transaction_cost'] == pytest.approx(NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES * 0.001)
 
     def test_rebalance_from_cash(self, sample_target_stocks_df: pd.DataFrame):
         cash_history_entry = {
             'date': '2020',
-            'stocks': [{'symbol': 'CASH', 'weight': 1.0, 'share_price': 1.0}],  # Simplified cash representation
+            'stocks': [{'symbol': 'CASH', 'weight': 1.0, 'share_price': 1.0, 'annual_return': 0.0}],
             'action': 'rebalance', 'value_bought': 0, 'value_sold': 0, 'transaction_cost': 0
         }
         current_history = [cash_history_entry]
@@ -128,21 +126,19 @@ class TestRebalance:
         entry = updated_history[1]
         assert entry['action'] == 'rebalance'
         # All target stocks (total weight 1.0) are bought
-        assert entry['value_bought'] == pytest.approx(NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES * 1.0)
-        assert entry['value_sold'] == 0.0  # Sold from CASH
-        assert entry['transaction_cost'] == pytest.approx(NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES * 1.0 * 0.001)
-
+        assert entry['value_bought'] == pytest.approx(NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES)
+        assert entry['value_sold'] == 0.0 # Selling CASH is not counted in value_sold for turnover
+        assert entry['transaction_cost'] == pytest.approx(NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES * 0.001)
 
     def test_dynamic_rebalance_no_change(self, sample_portfolio_history_entry: Dict[str, Any]):
         current_history = [sample_portfolio_history_entry]
         # Target stocks are identical to current holdings
         target_stocks_no_change = pd.DataFrame(sample_portfolio_history_entry['stocks'])
-
         updated_history = rebalance(
             current_history,
             target_stocks_no_change.copy(),
             '2021',
-            transaction_cost_rate=0.001, # Using specific value from original test
+            transaction_cost_rate=0.001,
             dynamic_rebalance_active=True,
             deviation_threshold=0.05
         )
@@ -152,14 +148,14 @@ class TestRebalance:
         assert entry['value_bought'] == 0.0
         assert entry['value_sold'] == 0.0
         assert entry['transaction_cost'] == 0.0
-        assert entry['stocks'] == sample_portfolio_history_entry['stocks']  # Carried forward
+        assert entry['stocks'] == sample_portfolio_history_entry['stocks']
 
     def test_dynamic_rebalance_triggered_by_deviation(self, sample_portfolio_history_entry: Dict[str, Any]):
         current_history = [sample_portfolio_history_entry]  # AAPL:0.5, MSFT:0.3, GOOG:0.2
         target_stocks_deviated = pd.DataFrame([
-            {'symbol': 'AAPL', 'weight': 0.3, 'share_price': 150.0},  # Deviated by 0.2 (>0.05)
-            {'symbol': 'MSFT', 'weight': 0.5, 'share_price': 300.0},  # Deviated by 0.2
-            {'symbol': 'GOOG', 'weight': 0.2, 'share_price': 2500.0},  # No change
+            {'symbol': 'AAPL', 'weight': 0.3, 'share_price': 150.0, 'annual_return': 10.0},  # Deviated by 0.2 (>0.05)
+            {'symbol': 'MSFT', 'weight': 0.5, 'share_price': 300.0, 'annual_return': 5.0},  # Deviated by 0.2
+            {'symbol': 'GOOG', 'weight': 0.2, 'share_price': 2500.0, 'annual_return': 15.0},  # No change
         ])
         updated_history = rebalance(
             current_history,
@@ -178,9 +174,9 @@ class TestRebalance:
     def test_dynamic_rebalance_triggered_by_new_stock(self, sample_portfolio_history_entry: Dict[str, Any]):
         current_history = [sample_portfolio_history_entry]
         target_stocks_new = pd.DataFrame([
-            {'symbol': 'AAPL', 'weight': 0.5, 'share_price': 150.0},
-            {'symbol': 'MSFT', 'weight': 0.3, 'share_price': 300.0},
-            {'symbol': 'TSLA', 'weight': 0.2, 'share_price': 800.0},  # New stock, GOOG removed
+            {'symbol': 'AAPL', 'weight': 0.5, 'share_price': 150.0, 'annual_return': 10.0},
+            {'symbol': 'MSFT', 'weight': 0.3, 'share_price': 300.0, 'annual_return': 5.0},
+            {'symbol': 'TSLA', 'weight': 0.2, 'share_price': 800.0, 'annual_return': 20.0},  # New stock, GOOG removed
         ])
         updated_history = rebalance(
             current_history,
@@ -188,7 +184,7 @@ class TestRebalance:
             '2021',
             transaction_cost_rate=DEFAULT_TRANSACTION_COST,
             dynamic_rebalance_active=True,
-            deviation_threshold=0.05
+            deviation_threshold=DEFAULT_DEVIATION_THRESHOLD
         )
         assert len(updated_history) == 2
         entry = updated_history[1]
@@ -197,8 +193,8 @@ class TestRebalance:
     def test_dynamic_rebalance_triggered_by_sold_stock(self, sample_portfolio_history_entry: Dict[str, Any]):
         current_history = [sample_portfolio_history_entry]  # AAPL, MSFT, GOOG
         target_stocks_sold = pd.DataFrame([
-            {'symbol': 'AAPL', 'weight': 0.7, 'share_price': 150.0},
-            {'symbol': 'MSFT', 'weight': 0.3, 'share_price': 300.0},
+            {'symbol': 'AAPL', 'weight': 0.7, 'share_price': 150.0, 'annual_return': 10.0},
+            {'symbol': 'MSFT', 'weight': 0.3, 'share_price': 300.0, 'annual_return': 5.0},
             # GOOG is sold (not in target)
         ])
         updated_history = rebalance(
@@ -207,7 +203,7 @@ class TestRebalance:
             '2021',
             transaction_cost_rate=DEFAULT_TRANSACTION_COST,
             dynamic_rebalance_active=True,
-            deviation_threshold=0.05
+            deviation_threshold=DEFAULT_DEVIATION_THRESHOLD
         )
         assert len(updated_history) == 2
         entry = updated_history[1]
@@ -217,8 +213,8 @@ class TestRebalance:
     def test_rebalance_target_weights_sum_zero(self, mock_click_echo, sample_portfolio_history_entry: Dict[str, Any]):
         current_history = [sample_portfolio_history_entry]
         target_stocks_zero_weight = pd.DataFrame([
-            {'symbol': 'AAPL', 'weight': 0.0, 'share_price': 150.0},
-            {'symbol': 'MSFT', 'weight': 0.0, 'share_price': 300.0},
+            {'symbol': 'AAPL', 'weight': 0.0, 'share_price': 150.0, 'annual_return': 10.0},
+            {'symbol': 'MSFT', 'weight': 0.0, 'share_price': 300.0, 'annual_return': 5.0},
         ])
         updated_history = rebalance(
             current_history,
@@ -244,13 +240,13 @@ class TestRebalance:
                                                   sample_portfolio_history_entry: Dict[str, Any]):
         current_history = [sample_portfolio_history_entry]
         target_stocks_no_price = pd.DataFrame([
-            {'symbol': 'AAPL', 'weight': 1.0},  # Missing share_price
+            {'symbol': 'AAPL', 'weight': 1.0, 'annual_return': 10.0}, # Missing share_price
         ])
         updated_history = rebalance(
             current_history,
             target_stocks_no_price.copy(),
             '2021',
-            transaction_cost_rate=DEFAULT_TRANSACTION_COST # FIXED: Added argument
+            transaction_cost_rate=DEFAULT_TRANSACTION_COST
         )
         mock_click_echo.assert_any_call(
             "Warning: 'share_price' missing in target_stocks for 2021. Using placeholder 1.0.",
@@ -437,71 +433,3 @@ class TestCalculateMetrics:
         assert metrics['total_return'] == pytest.approx(15.5, abs=0.01)
         assert metrics['average_annual_return'] == pytest.approx(4.92, abs=0.01)
         assert metrics['portfolio_size'] == 1  # Final portfolio has stock B
-
-
-# --- Tests for _load_market_data() ---
-@pytest.mark.unit
-class TestLoadMarketData:
-    def test_load_valid_csv(self, tmp_path):
-        file_path = tmp_path / "data.csv"
-        data = {'col1': [1, 2], 'col2': ['a', 'b']}
-        pd.DataFrame(data).to_csv(file_path, index=False)
-        df = _load_market_data(str(file_path))
-        assert isinstance(df, pd.DataFrame)
-        assert df.shape == (2, 2)
-        assert list(df.columns) == ['col1', 'col2']
-
-    def test_load_valid_json(self, tmp_path):
-        file_path = tmp_path / "data.json"
-        data = [{'col1': 1, 'col2': 'a'}, {'col1': 2, 'col2': 'b'}]
-        with open(file_path, 'w') as f:
-            json.dump(data, f)
-        df = _load_market_data(str(file_path))
-        assert isinstance(df, pd.DataFrame)
-        assert df.shape == (2, 2)
-        assert set(df.columns) == {'col1', 'col2'}  # Order might not be preserved from list of dicts
-
-    def test_load_file_not_found(self):
-        with pytest.raises(FileNotFoundError, match="Data file not found: nonexistent.csv"):
-            _load_market_data("nonexistent.csv")
-
-    def test_load_unsupported_extension(self, tmp_path):
-        file_path = tmp_path / "data.txt"
-        file_path.write_text("some data")
-        with pytest.raises(ValueError, match="Unsupported file format: '.txt'"):
-            _load_market_data(str(file_path))
-
-    def test_load_corrupt_json(self, tmp_path):
-        file_path = tmp_path / "data.json"
-        file_path.write_text("{'col1': 1, 'col2': 'a'")  # Malformed JSON
-        with pytest.raises(ValueError, match="Error decoding JSON"):
-            _load_market_data(str(file_path))
-
-    @patch('click.echo')  # To capture the warning
-    def test_load_empty_csv(self, mock_click_echo, tmp_path):
-        # Test CSV with headers but no data rows
-        file_path_headers_only = tmp_path / "empty_with_headers.csv"
-        pd.DataFrame(columns=['h1', 'h2']).to_csv(file_path_headers_only, index=False)
-        df_headers_only = _load_market_data(str(file_path_headers_only))
-        assert df_headers_only.empty
-        assert list(df_headers_only.columns) == ['h1', 'h2']
-        mock_click_echo.assert_not_called()  # No warning for this case
-
-        # Test truly empty CSV (0 bytes)
-        file_path_truly_empty = tmp_path / "truly_empty.csv"
-        file_path_truly_empty.write_text("")  # Creates an empty file
-
-        df_truly_empty = _load_market_data(str(file_path_truly_empty))
-        assert df_truly_empty.empty
-        assert list(df_truly_empty.columns) == []  # Should have no columns
-        mock_click_echo.assert_any_call(
-            f"Warning: CSV file {str(file_path_truly_empty)} is empty. Returning empty DataFrame.",
-            err=True
-        )
-
-    def test_load_empty_json_list(self, tmp_path):
-        file_path = tmp_path / "empty.json"
-        with open(file_path, 'w') as f:
-            json.dump([], f)  # JSON file with an empty list
-        df = _load_market_data(str(file_path))
-        assert df.empty

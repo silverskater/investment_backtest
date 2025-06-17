@@ -7,6 +7,7 @@ from backtest.constants import (
     ANNUAL_RISK_FREE_RATE,
     NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES
 )
+from backtest.utils.portfolio_calculations import calculate_portfolio_entry_return
 
 
 def calculate_metrics(
@@ -51,19 +52,7 @@ def _get_periodic_returns_from_history(portfolio_history: List[Dict[str, Any]]) 
     if len(portfolio_history) > 1:
         for i in range(1, len(portfolio_history)):
             period_entry = portfolio_history[i]
-            if period_entry['stocks'] and period_entry['stocks'][0].get('symbol') == 'CASH':
-                # If portfolio is all cash, assume 0% return for that period's performance
-                # (unless 'annual_return' is explicitly provided for CASH, which is unusual)
-                period_return = period_entry['stocks'][0].get('annual_return', 0.0) / 100.0
-            else:
-                # Calculate weighted average return for the period
-                # Assumes 'annual_return' is in percentage points (e.g., 10.0 for 10%)
-                # Assumes 'weight' is a fraction (e.g., 0.5 for 50%)
-                current_period_return = sum(
-                    stock.get('weight', 0) * (stock.get('annual_return', 0) / 100.0)
-                    for stock in period_entry['stocks']
-                )
-                period_return = current_period_return
+            period_return = calculate_portfolio_entry_return(period_entry)
             periodic_returns.append(period_return)
     return periodic_returns
 

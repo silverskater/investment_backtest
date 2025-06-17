@@ -1,11 +1,11 @@
-import pytest
-import os
-import pandas as pd
 import json
+import pandas as pd
+import pytest
 
 from click.testing import CliRunner
 from backtest.cli import cli
 
+@pytest.mark.e2e
 class TestExpFundRiskFeatures:
 
     def test_dynamic_rebalancing(self, generic_data_file_factory, tmp_path, monkeypatch):

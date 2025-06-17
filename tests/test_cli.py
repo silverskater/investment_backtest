@@ -7,8 +7,8 @@ import json
 from click.testing import CliRunner
 from backtest.cli import cli
 
-
-class TestBacktest:
+@pytest.mark.e2e # End-to-end tests for CLI
+class TestCli:
     def test_basic_backtest(self, generic_data_file_factory, monkeypatch): # sample_data_file uses default 'dgi'
         """Test basic backtest functionality with default parameters.
 
@@ -17,7 +17,7 @@ class TestBacktest:
         # Patch where the functions are looked up (in backtest.cli)
         monkeypatch.setattr('backtest.cli.validate_strategy', lambda name: True)
         monkeypatch.setattr('backtest.cli.get_strategy_description', lambda name: "Test Strategy Description from Mock")
-        # If list_available_strategies is called by the error path in cli.backtest:
+        # If the error path calls list_available_strategies in cli.backtest:
         # monkeypatch.setattr('backtest.cli.list_available_strategies', lambda: [{"name": "exp_fund", "description": "Mocked Error Path Strategy"}])
         data_file = generic_data_file_factory("exp_fund", seed=1)
         runner = CliRunner()

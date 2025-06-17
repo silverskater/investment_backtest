@@ -1,19 +1,15 @@
 import pytest
 import pandas as pd
 from click.testing import CliRunner
+from datetime import datetime
 
-# CLI entry point from example_data.py
-from backtest.example_data import cli as cli
+from backtest.example_data import cli as generate_data_cli
 from backtest.example_data import (
     STRATEGY_COLUMNS,
     NUM_IDEAL_DGI_STOCKS_PER_YEAR,
     NUM_IDEAL_VALUE_STOCKS_PER_YEAR,
     DEFAULT_START_YEAR_OFFSET
 )
-from datetime import datetime
-
-# For the ideal stocks test, import strategy classes
-from backtest.strategies.exp_fund import ExpFundStrategy
 from backtest.strategies.value_play import ValuePlayStrategy
 # For DGI, we'll use a helper based on its markdown, as a full DgiStrategy class might not be implemented yet
 # or might have more complex dependencies not suitable for this unit-like test.
@@ -25,7 +21,7 @@ STRATEGIES_TO_TEST = ['exp_fund', 'dgi', 'value_play']
 SP_QUALITY_RANK_MAPPING_FOR_TEST = {
     'A+': 6, 'A': 5, 'A-': 4,
     'B+': 3, 'B': 2, 'B-': 1,
-    'C': 0, 'D': -1 # Adding C and D for completeness, mapping to lower values
+    'C': 0, 'D': -1 # C and D for completeness, mapped to lower values
 }
 MIN_DGI_SP_QUALITY_NUMERIC = SP_QUALITY_RANK_MAPPING_FOR_TEST['B+']
 
@@ -43,20 +39,18 @@ def dgi_screener_for_test(df_year: pd.DataFrame) -> pd.DataFrame:
     ).fillna(0) # Default unmapped to a low numeric value
 
     sp_quality_condition = (df_year_copy['sp_quality_numeric'] >= MIN_DGI_SP_QUALITY_NUMERIC)
-
     condition = (
             (df_year.get('div_growth_streak', pd.Series(dtype=float)) >= 10) &
             (df_year.get('payout_ratio', pd.Series(dtype=float)) <= 0.60) &
             (df_year.get('eps_cagr_3y', pd.Series(dtype=float)) >= 0.05) &
             (df_year.get('roe', pd.Series(dtype=float)) >= 0.15) &
-            (df_year.get('debt_equity', pd.Series(dtype=float)) <= df_year.get('industry_debt_equity',
-                                                                               pd.Series(dtype=float))) &
+            (df_year.get('debt_equity', pd.Series(dtype=float)) <= df_year.get('industry_debt_equity', pd.Series(dtype=float))) &
             sp_quality_condition
     )
     return df_year[condition]
 
 
-@pytest.mark.unit
+@pytest.mark.e2e
 class TestGenerateExampleDataCLI:
 
     @pytest.mark.parametrize("strategy_name", STRATEGIES_TO_TEST)
@@ -68,22 +62,17 @@ class TestGenerateExampleDataCLI:
         runner = CliRunner()
         # Change CWD for the CLI runner to tmp_path so 'data/' subdir is created there
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(cli, [strategy_name])
-
+        result = runner.invoke(generate_data_cli, [strategy_name])
         assert result.exit_code == 0, f"CLI command failed for {strategy_name}: {result.output}"
-
-        # Default output path is data/[strategy_name].example_data.01.csv
+        # The default output path is data/[strategy_name].example_data.01.csv
         expected_file_name = f"{strategy_name}.example_data.01.csv"
         expected_file_path = tmp_path / "data" / expected_file_name
         assert expected_file_path.exists(), f"Output file not found for {strategy_name} at {expected_file_path}"
-
         try:
             df = pd.read_csv(expected_file_path)
         except Exception as e:
             pytest.fail(f"Failed to read generated CSV for {strategy_name}: {e}")
-
         assert not df.empty, f"Generated CSV for {strategy_name} is empty."
-
         # Check for a few key required columns
         required_cols = STRATEGY_COLUMNS[strategy_name]['required']
         for col in required_cols[:3]:  # Check first 3 required columns
@@ -97,12 +86,9 @@ class TestGenerateExampleDataCLI:
         strategy_name = "exp_fund"
         custom_file_name = "custom_exp_fund_data.csv"
         custom_output_path = tmp_path / custom_file_name
-
-        result = runner.invoke(cli, [strategy_name, str(custom_output_path)])
-
+        result = runner.invoke(generate_data_cli, [strategy_name, str(custom_output_path)])
         assert result.exit_code == 0, f"CLI command failed with custom path: {result.output}"
         assert custom_output_path.exists(), "Output file not found at custom path."
-
         try:
             df = pd.read_csv(custom_output_path)
             assert not df.empty, "Generated CSV at custom path is empty."
@@ -118,18 +104,15 @@ class TestGenerateExampleDataCLI:
         end_year_opt = 2022
         num_companies_opt = 5
         seed_opt = 123
-
-        result = runner.invoke(cli, [
+        result = runner.invoke(generate_data_cli, [
             strategy_name, str(output_file),
             "--start-year", str(start_year_opt),
             "--end-year", str(end_year_opt),
             "--num-companies", str(num_companies_opt),
             "--seed", str(seed_opt)
         ])
-
         assert result.exit_code == 0, f"CLI command failed with options: {result.output}"
         assert output_file.exists(), "Output file with options not found."
-
         df = pd.read_csv(output_file)
         assert not df.empty, "Generated CSV with options is empty."
 
@@ -143,12 +126,12 @@ class TestGenerateExampleDataCLI:
 
         # Verify data consistency with seed (by generating again and comparing)
         output_file_seed_check = tmp_path / "dgi_options_data_seed_check.csv"
-        runner.invoke(cli, [
+        runner.invoke(generate_data_cli, [
             strategy_name, str(output_file_seed_check),
             "--start-year", str(start_year_opt),
             "--end-year", str(end_year_opt),
             "--num-companies", str(num_companies_opt),
-            "--seed", str(seed_opt)  # Same seed
+            "--seed", str(seed_opt)
         ])
         df_seed_check = pd.read_csv(output_file_seed_check)
         pd.testing.assert_frame_equal(df, df_seed_check,
@@ -157,9 +140,7 @@ class TestGenerateExampleDataCLI:
     def test_generate_data_invalid_strategy(self):
         """Tests CLI behavior with an invalid strategy name."""
         runner = CliRunner()
-        result = runner.invoke(cli, ["invalid_strategy_name"])
-        assert result.exit_code != 0, "CLI should exit with non-zero code for invalid strategy."
-        # Click's Choice validation exits with 2
+        result = runner.invoke(generate_data_cli, ["invalid_strategy_name"])
         assert result.exit_code == 2, f"Expected exit code 2 for invalid choice, got {result.exit_code}. Output: {result.output}"
         expected_error_fragment = "Invalid value for 'STRATEGY': 'invalid_strategy_name' is not one of"
         assert expected_error_fragment in result.output, \
@@ -176,8 +157,7 @@ class TestGenerateExampleDataCLI:
         num_companies = 20  # Generate a reasonable number of companies
         start_year = datetime.now().year - DEFAULT_START_YEAR_OFFSET
         end_year = datetime.now().year - 1
-
-        result = runner.invoke(cli, [
+        result = runner.invoke(generate_data_cli, [
             strategy_name,
             "--num-companies", str(num_companies),
             "--start-year", str(start_year),
@@ -185,7 +165,6 @@ class TestGenerateExampleDataCLI:
             "--seed", "42"  # Use a fixed seed for reproducibility of this test
         ])
         assert result.exit_code == 0, f"Data generation failed for {strategy_name}: {result.output}"
-
         generated_file_path = tmp_path / "data" / f"{strategy_name}.example_data.01.csv"
         assert generated_file_path.exists()
         df_generated = pd.read_csv(generated_file_path)
@@ -197,16 +176,11 @@ class TestGenerateExampleDataCLI:
                 # or num_companies is very small. For this test, it shouldn't.
                 print(f"Warning: No data found for year {year} in generated file for {strategy_name}.")
                 continue
-
             if strategy_name == 'exp_fund':
                 # ExpFundStrategy filters on growth_threshold and top_n market_cap_rank
-                # Default params: growth_threshold=0.2, top_n=10
                 strategy_params = {'growth_threshold': 0.2, 'top_n': 10}
-                exp_fund_instance = ExpFundStrategy()
-                # We need to replicate the filtering part of execute_strategy
                 growth_filter_condition = (
-                        (df_year.get('sales_growth_5y', pd.Series(dtype=float)) >= strategy_params[
-                            'growth_threshold']) &
+                        (df_year.get('sales_growth_5y', pd.Series(dtype=float)) >= strategy_params['growth_threshold']) &
                         (df_year.get('market_cap_rank', pd.Series(dtype=int)) <= strategy_params['top_n'])
                 )
                 passed_screening = df_year[growth_filter_condition]
@@ -216,13 +190,10 @@ class TestGenerateExampleDataCLI:
                 # A more specific check could be that at least 1 stock passes if top_n is reasonable.
                 assert len(passed_screening) >= 1, \
                     f"Year {year}: Expected at least 1 stock to pass ExpFund screening, got {len(passed_screening)}."
-
-
             elif strategy_name == 'dgi':
                 passed_screening = dgi_screener_for_test(df_year)
                 assert len(passed_screening) >= NUM_IDEAL_DGI_STOCKS_PER_YEAR, \
                     f"Year {year}: Expected >= {NUM_IDEAL_DGI_STOCKS_PER_YEAR} DGI ideal stocks, found {len(passed_screening)} for {strategy_name}."
-
             elif strategy_name == 'value_play':
                 # Replicate ValuePlayStrategy screening
                 value_strategy = ValuePlayStrategy()
@@ -232,7 +203,6 @@ class TestGenerateExampleDataCLI:
                 # This is a bit more involved as execute_strategy also does weighting.
                 # We are interested in the count *after* screening, before weighting/top_n application by strategy.
                 # Let's adapt the screening logic directly from ValuePlayStrategy.py for clarity here.
-
                 candidates_df = df_year.copy()
                 if 'sp_quality' in candidates_df.columns:
                     candidates_df['sp_quality_numeric'] = value_strategy._map_sp_quality_to_numeric(
@@ -240,28 +210,18 @@ class TestGenerateExampleDataCLI:
                     )
                 else:
                     candidates_df['sp_quality_numeric'] = 0  # Will fail filter
-
-                pe_condition = (
-                        candidates_df.get('pe_ratio', pd.Series(dtype=float)) <
-                        candidates_df.get('sector_median_pe', pd.Series(dtype=float)) * 0.4
-                )
+                pe_condition = (candidates_df.get('pe_ratio', pd.Series(dtype=float)) < candidates_df.get('sector_median_pe', pd.Series(dtype=float)) * 0.4)
                 pb_condition = (candidates_df.get('pb_ratio', pd.Series(dtype=float)) < 1.0)
                 current_ratio_condition = (candidates_df.get('current_ratio', pd.Series(dtype=float)) > 1.5)
-                debt_equity_condition = (
-                        candidates_df.get('debt_equity', pd.Series(dtype=float)) <
-                        candidates_df.get('industry_avg_debt_equity', pd.Series(dtype=float))
-                )
+                debt_equity_condition = (candidates_df.get('debt_equity', pd.Series(dtype=float)) < candidates_df.get('industry_avg_debt_equity', pd.Series(dtype=float)))
                 roe_condition = (candidates_df.get('roe', pd.Series(dtype=float)) > 0.15)
                 eps_growth_condition = (candidates_df.get('eps_growth_5y', pd.Series(dtype=float)) > 0)
-                sp_quality_condition = (
-                        candidates_df.get('sp_quality_numeric',
-                                          pd.Series(dtype=float)) >= value_strategy.MIN_SP_QUALITY_NUMERIC)
+                sp_quality_condition = (candidates_df.get('sp_quality_numeric', pd.Series(dtype=float)) >= value_strategy.MIN_SP_QUALITY_NUMERIC)
                 margin_of_safety_condition = (candidates_df.get('margin_of_safety', pd.Series(dtype=float)) > 0.25)
-
                 passed_screening = candidates_df[
                     pe_condition & pb_condition & current_ratio_condition &
                     debt_equity_condition & roe_condition & eps_growth_condition &
                     sp_quality_condition & margin_of_safety_condition
-                    ]
+                ]
                 assert len(passed_screening) >= NUM_IDEAL_VALUE_STOCKS_PER_YEAR, \
                     f"Year {year}: Expected >= {NUM_IDEAL_VALUE_STOCKS_PER_YEAR} Value Play ideal stocks, found {len(passed_screening)} for {strategy_name}."

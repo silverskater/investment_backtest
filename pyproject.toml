@@ -31,9 +31,9 @@ generate_example_data = "backtest.example_data:cli"
 # Register all custom markers to avoid typos and ensure they are known to pytest.
 markers = [
     "unit: unit tests",
-    "end_to_end: end to end tests",
+    "e2e: end to end tests",
     "skip: slow tests",
-    # "integration: integration tests",
+    "integration: integration tests",
     # "smoke: smoke tests",
 ]
 # Default command-line options to apply for every run.

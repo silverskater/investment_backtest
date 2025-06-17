@@ -29,6 +29,7 @@ from backtest.strategy_manager import (
 from backtest.utils.data_loader import prepare_market_data
 from backtest.utils.metrics_calculator import calculate_metrics
 from backtest.utils.output_formatter import format_and_output_results
+from backtest.utils.portfolio_calculations import calculate_portfolio_entry_return
 from backtest.utils.rebalance import rebalance
 
 
@@ -164,25 +165,6 @@ def _run_strategy_backtest(
         return 1
 
 
-def _calculate_weighted_portfolio_return(portfolio_entry: Optional[Dict[str, Any]]) -> float:
-    """Calculates the weighted average return from a portfolio history entry's stocks."""
-    if not portfolio_entry or not portfolio_entry.get('stocks'):
-        return 0.0
-
-    stocks_df = pd.DataFrame(portfolio_entry['stocks'])
-    if stocks_df.empty or 'annual_return' not in stocks_df.columns or 'weight' not in stocks_df.columns:
-        # Handle case where portfolio is just CASH with no annual_return specified, or missing columns
-        if len(stocks_df) == 1 and stocks_df.iloc[0].get('symbol') == 'CASH':
-            return pd.to_numeric(stocks_df.iloc[0].get('annual_return', 0.0), errors='coerce').fillna(0.0) / 100.0
-        return 0.0
-
-    # Ensure 'annual_return' and 'weight' are numeric, fill NaNs appropriately
-    annual_returns_numeric = pd.to_numeric(stocks_df['annual_return'], errors='coerce').fillna(0.0)
-    weights_numeric = pd.to_numeric(stocks_df['weight'], errors='coerce').fillna(0.0)
-
-    return (annual_returns_numeric * weights_numeric).sum()
-
-
 def _process_single_period_backtest(
         year: int,
         full_market_data: pd.DataFrame,
@@ -209,7 +191,7 @@ def _process_single_period_backtest(
         click.echo(f"Warning: No data available for {year}. Skipping rebalance.", err=True)
         if updated_portfolio_history:
             # Calculate return based on the last known portfolio state
-            period_display_return_info['return'] = _calculate_weighted_portfolio_return(updated_portfolio_history[-1])
+            period_display_return_info['return'] = calculate_portfolio_entry_return(updated_portfolio_history[-1])
         return updated_portfolio_history, period_display_return_info
 
     strategy_output = execute_strategy(
@@ -262,7 +244,7 @@ def _process_single_period_backtest(
 
     # Calculate display return for the current period based on the *newly updated* history
     if updated_portfolio_history:
-        period_display_return_info['return'] = _calculate_weighted_portfolio_return(updated_portfolio_history[-1])
+        period_display_return_info['return'] = calculate_portfolio_entry_return(updated_portfolio_history[-1])
 
     return updated_portfolio_history, period_display_return_info
 
