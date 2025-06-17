@@ -57,7 +57,9 @@ NUM_IDEAL_VALUE_STOCKS_PER_YEAR = 4  # Number of stocks to ensure pass Value cri
 # --- Helper Functions for Data Generation ---
 
 def _generate_core_arrays(rng: np.random.Generator, start_year: int, end_year: int, num_companies: int):
-    """Generates core arrays for year, symbol, and market cap ranks."""
+    """Generates core arrays for year, symbol, and market cap ranks.
+    This function is a good candidate to be moved to a utils module.
+    """
     num_years = end_year - start_year + 1
     total_rows = num_years * num_companies
 
@@ -88,6 +90,62 @@ def _generate_core_arrays(rng: np.random.Generator, start_year: int, end_year: i
     market_cap_ranks_array = np.concatenate(yearly_ranks_list)
 
     return years_array, symbols_array, market_cap_ranks_array, total_rows
+
+
+def _generate_share_prices_over_time(
+    rng: np.random.Generator,
+    symbols_array: np.ndarray, # Full symbols array for all rows
+    num_companies_total: int, # Number of unique companies
+    total_rows: int,
+    base_price_low: float,
+    base_price_high: float,
+    annual_change_loc: float,
+    annual_change_scale: float,
+    min_price: float = 1.0
+) -> np.ndarray:
+    """Generates share prices iteratively over time for all stocks."""
+    base_prices = rng.uniform(base_price_low, base_price_high, size=num_companies_total)
+    share_prices_array = np.zeros(total_rows)
+
+    # Assumes symbols_array[:num_companies_total] contains unique symbols for the first year
+    unique_symbols_first_year = symbols_array[:num_companies_total]
+    stock_base_price_map = {symbol: base_prices[i] for i, symbol in enumerate(unique_symbols_first_year)}
+
+    for i in range(total_rows):
+        symbol = symbols_array[i]
+        is_first_year_for_stock = (i < num_companies_total) # True if current row is in the first year block
+
+        if is_first_year_for_stock:
+            share_prices_array[i] = stock_base_price_map[symbol]
+        else:
+            # Assumes data is ordered: all companies for year 1, then all for year 2, etc.
+            # So, previous year's data for the same stock is num_companies_total rows behind.
+            prev_row_absolute_idx = i - num_companies_total
+            prev_price = share_prices_array[prev_row_absolute_idx]
+            annual_change_pct = rng.normal(loc=annual_change_loc, scale=annual_change_scale)
+            share_prices_array[i] = np.maximum(min_price, prev_price * (1 + annual_change_pct))
+    return share_prices_array
+
+
+def _calculate_annual_returns_from_prices(
+    share_prices_array: np.ndarray,
+    num_companies_total: int, # Number of unique companies
+    total_rows: int
+) -> np.ndarray:
+    """Calculates annual returns in percentage from a share prices array."""
+    annual_returns_array = np.zeros(total_rows)
+    for i in range(total_rows):
+        is_not_first_year_for_stock = (i >= num_companies_total)
+
+        if is_not_first_year_for_stock:
+            prev_row_absolute_idx = i - num_companies_total
+            prev_price = share_prices_array[prev_row_absolute_idx]
+            current_price = share_prices_array[i]
+            if prev_price > 0:  # Avoid division by zero
+                annual_returns_array[i] = ((current_price - prev_price) / prev_price) * 100.0
+            # else: annual_returns_array[i] remains 0.0 (for cases like prev_price <= 0)
+        # else: annual_returns_array[i] remains 0.0 (correct for the first year of data for each stock)
+    return annual_returns_array
 
 
 def _generate_exp_fund_data(rng: np.random.Generator, years_array: np.ndarray,
@@ -122,7 +180,7 @@ def _generate_exp_fund_data(rng: np.random.Generator, years_array: np.ndarray,
         min_val, max_val = series.min(), series.max()
         if max_val > min_val:
             return (series - min_val) / (max_val - min_val)
-        return pd.Series(0.0, index=series.index)  # All values are the same
+        return pd.Series(0.0, index=series.index)
 
     temp_df = pd.DataFrame({
         'year': years_array,
@@ -157,11 +215,11 @@ def _craft_ideal_dgi_stocks(
     Modifies the metrics_data in-place to ensure some stocks meet ideal DGI criteria.
     """
     symbols_array = metrics_data['symbol']
-    unique_symbols = np.unique(symbols_array)
+    unique_symbols = np.unique(symbols_array[:num_companies_total]) # Use first year's symbols
     num_ideal_to_craft = min(NUM_IDEAL_DGI_STOCKS_PER_YEAR, num_companies_total)
+    if num_ideal_to_craft == 0: return # Avoid error if num_companies_total is 0
     ideal_symbols_chosen = rng.choice(unique_symbols, size=num_ideal_to_craft, replace=False)
 
-    # Access arrays from the metrics_data dictionary
     div_growth_streak_array = metrics_data['div_growth_streak']
     payout_ratio_array = metrics_data['payout_ratio']
     eps_cagr_array = metrics_data['eps_cagr_3y']
@@ -176,6 +234,7 @@ def _craft_ideal_dgi_stocks(
     for ideal_sym in ideal_symbols_chosen:
         indices_for_ideal_stock = np.where(symbols_array == ideal_sym)[0]
         num_rows_for_stock = len(indices_for_ideal_stock)
+        if num_rows_for_stock == 0: continue
 
         # 1. div_growth_streak >= 10
         div_growth_streak_array[indices_for_ideal_stock] = rng.integers(10, 31, size=num_rows_for_stock)
@@ -188,23 +247,16 @@ def _craft_ideal_dgi_stocks(
         # 5. debt_equity <= industry_debt_equity
         ideal_debt_equity = rng.uniform(0.1, 1.0, size=num_rows_for_stock)
         debt_equity_array[indices_for_ideal_stock] = ideal_debt_equity
-        industry_debt_equity_array[indices_for_ideal_stock] = ideal_debt_equity * rng.uniform(1.0, 1.5,
-                                                                                              size=num_rows_for_stock)
+        industry_debt_equity_array[indices_for_ideal_stock] = ideal_debt_equity * rng.uniform(1.0, 1.5, size=num_rows_for_stock)
         # 6. sp_quality >= 'B+'
-        sp_quality_array[indices_for_ideal_stock] = rng.choice(['B+', 'A-', 'A', 'A+'], size=num_rows_for_stock,
-                                                               p=[0.3, 0.3, 0.2, 0.2])
-
+        sp_quality_array[indices_for_ideal_stock] = rng.choice(['B+', 'A-', 'A', 'A+'], size=num_rows_for_stock, p=[0.3, 0.3, 0.2, 0.2])
         # Also ensure other DGI weighting factors are reasonable for these ideal stocks
-        dividend_yield_array[indices_for_ideal_stock] = rng.uniform(0.02, 0.055,
-                                                                    size=num_rows_for_stock)  # Decent yield
-        div_growth_5y_array[indices_for_ideal_stock] = rng.uniform(0.055, 0.15, size=num_rows_for_stock)  # Solid growth
-
+        # Decent yield
+        dividend_yield_array[indices_for_ideal_stock] = rng.uniform(0.02, 0.055, size=num_rows_for_stock)
+        # Solid growth
+        div_growth_5y_array[indices_for_ideal_stock] = rng.uniform(0.055, 0.15, size=num_rows_for_stock)
         # Recalculate quality_score for these ideal stocks based on their new ROE and EPS CAGR
-        quality_score_array[indices_for_ideal_stock] = np.maximum(0.0,
-                                                                  (roe_array[indices_for_ideal_stock] * 0.6) + (
-                                                                              eps_cagr_array[
-                                                                                  indices_for_ideal_stock] * 0.4)
-                                                                  )
+        quality_score_array[indices_for_ideal_stock] = np.maximum(0.0, (roe_array[indices_for_ideal_stock] * 0.6) + (eps_cagr_array[indices_for_ideal_stock] * 0.4))
     # No explicit return needed as metrics_data is modified in place.
 
 
@@ -214,32 +266,19 @@ def _generate_dgi_data(rng: np.random.Generator, years_array: np.ndarray,
     """Generates synthetic data specific to the 'dgi' strategy,
     ensuring some stocks meet DGI criteria."""
 
-    num_companies_total = len(np.unique(symbols_array))
+    num_companies_total = len(np.unique(symbols_array[:total_rows // (years_array[-1] - years_array[0] + 1)] if total_rows > 0 else []))
 
-    # --- Generate initial random values for all metrics ---
-    base_prices = rng.uniform(20.0, 200.0, size=num_companies_total)
-    share_prices_array = np.zeros(total_rows)
-    stock_indices_map = {symbol: i for i, symbol in enumerate(np.unique(symbols_array))}
 
-    for i in range(total_rows):
-        symbol = symbols_array[i]
-        year_val = years_array[i]
-        current_year_idx_in_loop = year_val - years_array[0]
-        stock_idx_in_unique_list = stock_indices_map[symbol]
-
-        if current_year_idx_in_loop == 0:
-            share_prices_array[i] = base_prices[stock_idx_in_unique_list]
-        else:
-            prev_row_absolute_idx = i - num_companies_total
-            prev_price = share_prices_array[prev_row_absolute_idx]
-            annual_change_pct = rng.normal(loc=0.08, scale=0.15)
-            share_prices_array[i] = np.maximum(1.0, prev_price * (1 + annual_change_pct))
+    share_prices_array = _generate_share_prices_over_time(
+        rng, symbols_array, num_companies_total, total_rows,
+        base_price_low=20.0, base_price_high=200.0,
+        annual_change_loc=0.08, annual_change_scale=0.15, min_price=1.0
+    )
 
     streak_base = 30.0 / np.sqrt(market_cap_ranks_array)
     streak_noise = rng.integers(-5, 10, size=total_rows)
     div_growth_streak_array = np.maximum(0, (streak_base + streak_noise)).astype(int)
-    div_growth_streak_array = np.maximum(div_growth_streak_array,
-                                         rng.choice([0, 5, 10, 15], size=total_rows, p=[0.7, 0.1, 0.1, 0.1]))  # General
+    div_growth_streak_array = np.maximum(div_growth_streak_array, rng.choice([0, 5, 10, 15], size=total_rows, p=[0.7, 0.1, 0.1, 0.1]))
 
     payout_ratio_base = rng.uniform(0.2, 0.8, size=total_rows)
     payout_ratio_base -= (div_growth_streak_array / 100.0) * 0.1
@@ -247,16 +286,14 @@ def _generate_dgi_data(rng: np.random.Generator, years_array: np.ndarray,
 
     eps_cagr_base = rng.uniform(0.00, 0.20, size=total_rows)
     eps_cagr_base += (div_growth_streak_array / 100.0) * 0.02
-    eps_cagr_array = eps_cagr_base + rng.uniform(-0.05, 0.05, size=total_rows)
+    eps_cagr_array = np.clip(eps_cagr_base + rng.uniform(-0.05, 0.05, size=total_rows), -0.10, 0.30)
 
-    eps_cagr_array = np.clip(eps_cagr_array, -0.10, 0.30)
     roe_base = rng.uniform(0.05, 0.30, size=total_rows)
     roe_base += (eps_cagr_array * 0.5)
     roe_array = np.clip(roe_base + rng.uniform(-0.07, 0.07, size=total_rows), 0.01, 0.50)
 
     debt_equity_array = rng.uniform(0.1, 2.5, size=total_rows)
-    industry_debt_equity_array = debt_equity_array * rng.uniform(0.7, 1.3, size=total_rows) + rng.uniform(-0.3, 0.3,
-                                                                                                          size=total_rows)
+    industry_debt_equity_array = debt_equity_array * rng.uniform(0.7, 1.3, size=total_rows) + rng.uniform(-0.3, 0.3, size=total_rows)
     industry_debt_equity_array = np.maximum(0.05, industry_debt_equity_array)
 
     quality_proxy = (roe_array * 10) - (debt_equity_array * 2) + (div_growth_streak_array / 5)
@@ -299,32 +336,14 @@ def _generate_dgi_data(rng: np.random.Generator, years_array: np.ndarray,
         'market_cap_rank': market_cap_ranks_array, # Initial rank
     }
 
-    # --- Craft ideal DGI stocks ---
     _craft_ideal_dgi_stocks(rng, metrics_data, num_companies_total)
 
-
-    # --- Calculate Annual Returns from Share Prices ---
-    # Access modified share_prices_array from metrics_data if it was part of it,
-    # or use the local one if it wasn't intended to be modified by _craft_ideal_dgi_stocks
-    # For now, assuming share_prices_array was not modified by _craft_ideal_dgi_stocks
-    # If it was, it should be metrics_data['share_price']
-    annual_returns_array = np.zeros(total_rows)
-    current_share_prices = metrics_data['share_price'] # Use the one from the dict
-
-    for i in range(total_rows):
-        current_year_idx_in_loop = years_array[i] - years_array[0]
-        if current_year_idx_in_loop > 0:
-            prev_row_absolute_idx = i - num_companies_total
-            prev_price = current_share_prices[prev_row_absolute_idx]
-            current_price = current_share_prices[i]
-            if prev_price > 0:
-                annual_returns_array[i] = ((current_price - prev_price) / prev_price) * 100
-            else:
-                annual_returns_array[i] = 0.0
+    annual_returns_array = _calculate_annual_returns_from_prices(
+        metrics_data['share_price'], num_companies_total, total_rows
+    )
     metrics_data['annual_return'] = annual_returns_array
 
 
-    # Create DataFrame from the potentially modified metrics_data
     data_df = pd.DataFrame(metrics_data)
 
     shares_outstanding_array = rng.integers(20_000_000, 1_500_000_000, size=total_rows)
@@ -332,10 +351,7 @@ def _generate_dgi_data(rng: np.random.Generator, years_array: np.ndarray,
     data_df['market_cap'] = data_df['share_price'] * data_df['shares_outstanding']
     # Re-calculate market_cap_rank based on newly derived market_cap for DGI
     data_df = data_df.sort_values(by=['year', 'market_cap'], ascending=[True, False])
-    data_df['market_cap_rank'] = data_df.groupby('year')['market_cap'].rank(
-        method='min', ascending=False
-    ).astype(int)
-
+    data_df['market_cap_rank'] = data_df.groupby('year')['market_cap'].rank(method='min', ascending=False).astype(int)
     return data_df
 
 
@@ -348,17 +364,16 @@ def _craft_ideal_value_stocks(
     Modifies the metrics_data in-place to ensure some stocks meet ideal Value criteria.
     """
     symbols_array = metrics_data['symbol']
-    unique_symbols = np.unique(symbols_array)
+    unique_symbols = np.unique(symbols_array[:num_companies_total]) # Use first year's symbols
     num_ideal_to_craft = min(NUM_IDEAL_VALUE_STOCKS_PER_YEAR, num_companies_total)
+    if num_ideal_to_craft == 0: return
     ideal_symbols_chosen = rng.choice(unique_symbols, size=num_ideal_to_craft, replace=False)
 
-    # Access all necessary arrays from metrics_data
     share_prices_array = metrics_data['share_price']
-    market_cap_array = metrics_data['market_cap'] # Assuming market_cap is generated before this call
+    market_cap_array = metrics_data['market_cap']
     pe_ratio_array = metrics_data['pe_ratio']
     sector_median_pe_array = metrics_data['sector_median_pe']
     pb_ratio_array = metrics_data['pb_ratio']
-    # sector_median_pb_array = metrics_data['sector_median_pb'] # Not modified for ideal, only read if needed
     fcf_yield_array = metrics_data['fcf_yield']
     sector_median_fcf_yield_array = metrics_data['sector_median_fcf_yield']
     tangible_book_value_per_share_array = metrics_data['tangible_book_value_per_share']
@@ -377,10 +392,10 @@ def _craft_ideal_value_stocks(
     composite_value_score_array = metrics_data['composite_value_score']
     quality_score_array = metrics_data['quality_score']
 
-
     for ideal_sym in ideal_symbols_chosen:
         indices_for_ideal_stock = np.where(symbols_array == ideal_sym)[0]
         num_rows_for_stock = len(indices_for_ideal_stock)
+        if num_rows_for_stock == 0: continue
 
         # Undervaluation
         ideal_pe = rng.uniform(5, 10, size=num_rows_for_stock)
@@ -398,7 +413,6 @@ def _craft_ideal_value_stocks(
         industry_avg_debt_equity_array[indices_for_ideal_stock] = ideal_company_de * rng.uniform(1.1, 2.5, size=num_rows_for_stock)
         roe_array[indices_for_ideal_stock] = rng.uniform(0.155, 0.35, size=num_rows_for_stock)
         positive_ni_5y_streak_array[indices_for_ideal_stock] = rng.integers(5, 11, size=num_rows_for_stock)
-
         ideal_tbv = market_cap_array[indices_for_ideal_stock] * rng.uniform(0.5, 1.0, size=num_rows_for_stock)
         total_book_value_array[indices_for_ideal_stock] = ideal_tbv
         total_debt_array[indices_for_ideal_stock] = ideal_tbv * rng.uniform(0.1, 0.9, size=num_rows_for_stock)
@@ -415,15 +429,8 @@ def _craft_ideal_value_stocks(
         # Recalculate scores for ideal stocks
         ideal_pe_score = np.maximum(0, 1 - (pe_ratio_array[indices_for_ideal_stock] / 40))
         ideal_pb_score = np.maximum(0, 1 - (pb_ratio_array[indices_for_ideal_stock] / 2.5))
-        composite_value_score_array[indices_for_ideal_stock] = \
-            (margin_of_safety_array[indices_for_ideal_stock] * 0.5) + \
-            (ideal_pe_score * 0.25) + \
-            (ideal_pb_score * 0.25) + rng.uniform(0.1, 0.3, size=num_rows_for_stock)
-
-        quality_score_array[indices_for_ideal_stock] = \
-            (np.clip(roe_array[indices_for_ideal_stock],0,0.5) * 2 * 0.5) + \
-            (np.clip(positive_ni_5y_streak_array[indices_for_ideal_stock],0,10) / 10 * 0.3) + \
-            (significant_insider_activity_array[indices_for_ideal_stock].astype(int) * 0.2)
+        composite_value_score_array[indices_for_ideal_stock] = (margin_of_safety_array[indices_for_ideal_stock] * 0.5) + (ideal_pe_score * 0.25) + (ideal_pb_score * 0.25) + rng.uniform(0.1, 0.3, size=num_rows_for_stock)
+        quality_score_array[indices_for_ideal_stock] = (np.clip(roe_array[indices_for_ideal_stock],0,0.5) * 2 * 0.5) + (np.clip(positive_ni_5y_streak_array[indices_for_ideal_stock],0,10) / 10 * 0.3) + (significant_insider_activity_array[indices_for_ideal_stock].astype(int) * 0.2)
         quality_score_array[indices_for_ideal_stock] = np.clip(quality_score_array[indices_for_ideal_stock], 0.6, 1.0)
     # No explicit return needed
 
@@ -433,41 +440,15 @@ def _generate_value_play_data(rng: np.random.Generator, years_array: np.ndarray,
                               total_rows: int) -> pd.DataFrame:
     """Generates synthetic data specific to the 'value_play' strategy,
     ensuring some stocks meet Value criteria."""
-    num_companies_total = len(np.unique(symbols_array))
+    num_companies_total = len(np.unique(symbols_array[:total_rows // (years_array[-1] - years_array[0] + 1)] if total_rows > 0 else []))
 
-    # --- Generate initial random values for all metrics ---
-    # Basic data
-    base_share_prices = rng.uniform(10.0, 300.0, size=num_companies_total)
-    share_prices_array = np.zeros(total_rows)
-    stock_indices_map = {symbol: i for i, symbol in enumerate(np.unique(symbols_array))}
+    share_prices_array = _generate_share_prices_over_time(
+        rng, symbols_array, num_companies_total, total_rows,
+        base_price_low=10.0, base_price_high=300.0,
+        annual_change_loc=0.07, annual_change_scale=0.20, min_price=0.50
+    )
 
-    for i in range(total_rows):
-        symbol = symbols_array[i]
-        year_val = years_array[i]
-        current_year_idx_in_loop = year_val - years_array[0]
-        stock_idx_in_unique_list = stock_indices_map[symbol]
-        if current_year_idx_in_loop == 0:
-            share_prices_array[i] = base_share_prices[stock_idx_in_unique_list]
-        else:
-            prev_row_absolute_idx = i - num_companies_total
-            prev_price = share_prices_array[prev_row_absolute_idx]
-            annual_change_pct = rng.normal(loc=0.07, scale=0.20)  # Value stocks might have different return profile
-            share_prices_array[i] = np.maximum(0.50, prev_price * (1 + annual_change_pct))  # Min price $0.50
-
-    annual_returns_array = np.zeros(total_rows)
-    for i in range(total_rows):
-        current_year_idx_in_loop = years_array[i] - years_array[0]
-        if current_year_idx_in_loop > 0:
-            prev_row_absolute_idx = i - num_companies_total
-            prev_price = share_prices_array[prev_row_absolute_idx]
-            current_price = share_prices_array[i]
-            if prev_price > 0:
-                annual_returns_array[i] = ((current_price - prev_price) / prev_price) * 100
-            else:
-                annual_returns_array[i] = 0.0
-
-    sectors = ['Financials', 'Industrials', 'Consumer Staples', 'Technology', 'Healthcare', 'Energy', 'Utilities',
-               'Consumer Discretionary', 'Materials', 'Real Estate', 'Communication Services']
+    sectors = ['Financials', 'Industrials', 'Consumer Staples', 'Technology', 'Healthcare', 'Energy', 'Utilities', 'Consumer Discretionary', 'Materials', 'Real Estate', 'Communication Services']
     sector_array = rng.choice(sectors, size=total_rows)
 
     # Undervaluation metrics
@@ -530,8 +511,7 @@ def _generate_value_play_data(rng: np.random.Generator, years_array: np.ndarray,
     # Group all generated arrays into a dictionary
     metrics_data = {
         'year': years_array, 'symbol': symbols_array, 'share_price': share_prices_array,
-        'annual_return': annual_returns_array, 'sector': sector_array,
-        'pe_ratio': pe_ratio_array, 'sector_median_pe': sector_median_pe_array,
+        'sector': sector_array, 'pe_ratio': pe_ratio_array, 'sector_median_pe': sector_median_pe_array,
         'pb_ratio': pb_ratio_array, 'sector_median_pb': sector_median_pb_array,
         'fcf_yield': fcf_yield_array, 'sector_median_fcf_yield': sector_median_fcf_yield_array,
         'tangible_book_value_per_share': tangible_book_value_per_share_array,
@@ -542,17 +522,18 @@ def _generate_value_play_data(rng: np.random.Generator, years_array: np.ndarray,
         'margin_of_safety': margin_of_safety_array, 'total_book_value': total_book_value_array,
         'sp_quality': sp_quality_array, 'eps_growth_5y': eps_growth_5y_array,
         'significant_insider_activity': significant_insider_activity_array,
-        'composite_value_score': composite_value_score_array,
-        'quality_score': quality_score_array,
-        'market_cap_rank': market_cap_ranks_array,
-        'shares_outstanding': shares_outstanding_array,
+        'composite_value_score': composite_value_score_array, 'quality_score': quality_score_array,
+        'market_cap_rank': market_cap_ranks_array, 'shares_outstanding': shares_outstanding_array,
         'market_cap': market_cap_array
     }
 
-    # --- Craft ideal Value stocks ---
     _craft_ideal_value_stocks(rng, metrics_data, num_companies_total)
 
-    # Create DataFrame from the potentially modified metrics_data
+    annual_returns_array = _calculate_annual_returns_from_prices(
+        metrics_data['share_price'], num_companies_total, total_rows
+    )
+    metrics_data['annual_return'] = annual_returns_array
+
     data_df = pd.DataFrame(metrics_data)
 
     # Re-calculate market_cap_rank based on newly derived market_cap if it was based on share_price * shares_outstanding
@@ -646,8 +627,7 @@ def generate_example_data(
         else:
             data_df[col] = pd.NA  # Add missing required columns
             final_cols_ordered.append(col)
-            click.echo(f"Warning: Required column '{col}' for strategy '{strategy_name}' was missing and added as NA.",
-                       err=True)
+            click.echo(f"Warning: Required column '{col}' for strategy '{strategy_name}' was missing and added as NA.", err=True)
 
     # Add optional columns that were generated, preserving their relative order if possible
     # or just appending them if they are not in required_cols already.
