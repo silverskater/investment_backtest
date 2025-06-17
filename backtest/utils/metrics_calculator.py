@@ -11,7 +11,7 @@ from backtest.constants import (
 
 def calculate_metrics(
         portfolio_history: List[Dict[str, Any]],
-        benchmark_returns: Optional[pd.Series] = None,  # Placeholder for future use
+        benchmark_returns: Optional[pd.Series] = None,  # TODO: Placeholder for future use
         risk_free_rate: float = ANNUAL_RISK_FREE_RATE,
         notional_value_for_ptr: float = NOTIONAL_PORTFOLIO_VALUE_FOR_TRADES
 ) -> Dict[str, float]:
@@ -34,7 +34,7 @@ def calculate_metrics(
 
     metrics['portfolio_size'] = _get_final_portfolio_size(portfolio_history)
 
-    # Placeholder for S&P 500 comparison or other benchmark
+    # TODO: Placeholder for S&P 500 comparison or other benchmark
     # This would require benchmark_returns to be processed aligned with portfolio_returns
     metrics['sp500_comparison'] = 0.0  # Default if not implemented or benchmark_returns not provided
 

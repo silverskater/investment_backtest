@@ -70,7 +70,7 @@ class TestExpFundRiskFeatures:
         # --- Test with a different deviation threshold (using monkeypatch) ---
         # This tests if the rebalance function uses the threshold.
         # Note: This doesn't test the CLI option as it's not exposed.
-        monkeypatch.setattr('backtest.cli.DEFAULT_DEVIATION_THRESHOLD', 0.001)  # Very low threshold
+        monkeypatch.setattr('backtest.constants.DEFAULT_DEVIATION_THRESHOLD', 0.001)  # Very low threshold
         data_file_low_thresh = generic_data_file_factory('exp_fund', start_year, end_year, seed=102)
         output_json_path_low_thresh = tmp_path / "dynamic_rebalance_low_thresh_results.json"
 

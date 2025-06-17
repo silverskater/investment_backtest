@@ -536,9 +536,7 @@ def _generate_value_play_data(rng: np.random.Generator, years_array: np.ndarray,
 
     data_df = pd.DataFrame(metrics_data)
 
-    # Re-calculate market_cap_rank based on newly derived market_cap if it was based on share_price * shares_outstanding
-    # This is already done if market_cap_array was used for shares_outstanding_array earlier.
-    # If market_cap was derived at the end, re-rank.
+    # Re-calculate market_cap_rank based on the final market_cap values.
     data_df = data_df.sort_values(by=['year', 'market_cap'], ascending=[True, False])
     data_df['market_cap_rank'] = data_df.groupby('year')['market_cap'].rank(method='min', ascending=False).astype(int)
 
@@ -609,7 +607,6 @@ def generate_example_data(
             rng, years_array, symbols_array, market_cap_ranks_array, total_rows
         )
     else:
-        # Fallback
         raise NotImplementedError(f"Data generation not implemented for strategy: {strategy_name}")
 
     # Ensure required columns are present (even if NaN) and optional ones are included if generated

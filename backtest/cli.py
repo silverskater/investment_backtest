@@ -6,28 +6,31 @@ It uses the Click library to define commands and options.
 """
 
 
+# Standard library imports
 from datetime import datetime
+import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
+# Third-party imports
 import click
 import pandas as pd
 
+# Local application/ library-specific imports
+from backtest.constants import (
+    DEBUG,
+    DEFAULT_TRANSACTION_COST
+)
 from backtest.strategy_manager import (
     execute_strategy,
     get_strategy_description,
     list_available_strategies,
     validate_strategy,
 )
-from backtest.stress_tests import apply_stress_test
-from backtest.utils.metrics_calculator import calculate_metrics
-from backtest.utils.rebalance import rebalance
 from backtest.utils.data_loader import prepare_market_data
+from backtest.utils.metrics_calculator import calculate_metrics
 from backtest.utils.output_formatter import format_and_output_results
+from backtest.utils.rebalance import rebalance
 
-from backtest.constants import (
-    DEFAULT_TRANSACTION_COST,
-    DEFAULT_DEVIATION_THRESHOLD
-)
 
 def _perform_backtest_core_logic(
     strategy_name: str,
@@ -44,7 +47,6 @@ def _perform_backtest_core_logic(
     stress_test: str,
     include_delisted: bool,
     rebalance_frequency: str
-    # output and benchmark are not needed by core logic, but by the calling context for output formatting
 ) -> Tuple[Dict[str, float], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any], str]:
     """
     Performs the core logic of the backtest.
@@ -150,13 +152,15 @@ def _run_strategy_backtest(
         click.echo(f"Error writing output file: {e}", err=True)
         return 1
     except Exception as e:
-        # It's good practice to log the full traceback for unexpected errors
-        # import traceback
-        # click.echo(traceback.format_exc(), err=True)
-        click.echo(
-            f"An unexpected error occurred during the backtest: {type(e).__name__} - {e}",
-            err=True
-        )
+        if DEBUG:
+            # Log the full traceback for an unexpected error
+            click.echo("An unexpected error occurred. Full traceback:", err=True)
+            click.echo(traceback.format_exc(), err=True)  # Log the full traceback
+        else:
+            click.echo(
+                f"An unexpected error occurred during the backtest: {type(e).__name__} - {e}",
+                err=True
+            )
         return 1
 
 
@@ -314,7 +318,7 @@ def cli():
 )
 @click.option(
     "--start-year", "-s",
-    default=lambda: datetime.now().year - 10 - 1,  # A 10-year period ending last year
+    default=lambda: datetime.now().year - 10 - 1,  # Default start for a 10-year period ending last year.
     type=int,
     show_default="current year - 11",
     help="Start year of the backtest period."

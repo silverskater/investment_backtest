@@ -1,5 +1,6 @@
 """Implementation of the Exponential Fund strategy."""
 
+
 from typing import Dict, Any
 
 import pandas as pd
@@ -86,7 +87,7 @@ class ExpFundStrategy(Strategy):
         if 'share_price' not in growth_stocks.columns:
             # This should not happen if data_for_period has share_price
             # and columns_to_keep includes it.
-            growth_stocks['share_price'] = 1.0 # Placeholder, not ideal
+            growth_stocks['share_price'] = 1.0 # TODO: Placeholder, not ideal
 
         # Apply the selected weighting strategy
         if hybrid_weighting and 'ps_ratio' in growth_stocks.columns:
@@ -113,7 +114,7 @@ class ExpFundStrategy(Strategy):
 
         results = {
             'portfolio': growth_stocks,
-            'metrics': self.calculate_metrics(growth_stocks)  # Placeholder metrics
+            'metrics': self.calculate_metrics(growth_stocks)
         }
         return results
 

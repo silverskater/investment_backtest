@@ -15,3 +15,8 @@ DEFAULT_TRANSACTION_COST: float = 0.005
 
 # Default deviation threshold for dynamic rebalancing.
 DEFAULT_DEVIATION_THRESHOLD: float = 0.05
+
+# Global DEBUG flag
+# Set to True to enable more verbose error logging, like full tracebacks.
+# Set to False for production or normal operation.
+DEBUG: bool = False
