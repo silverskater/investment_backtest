@@ -6,7 +6,7 @@ import click
 import pandas as pd
 from pandas.errors import EmptyDataError
 
-from backtest.stress_tests import apply_stress_test
+from .stress_tests import apply_stress_test
 
 
 def prepare_market_data(
