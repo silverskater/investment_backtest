@@ -29,29 +29,32 @@ from backtest.utils.metrics_calculator import calculate_metrics
 from backtest.utils.output_formatter import format_and_output_results
 from backtest.utils.portfolio_calculations import calculate_portfolio_entry_return
 from backtest.utils.rebalance import rebalance
+from data_provider.cli import data_command
+# Import AVAILABLE_FETCHERS from data_provider.constants
+from data_provider.constants import AVAILABLE_FETCHERS
 
 
 def _perform_backtest_core_logic(
-    strategy_name: str,
-    data_file_path: str,
-    start_year: int,
-    end_year: int,
-    growth_threshold: float,
-    top_n: int,
-    hybrid_weighting: bool,
-    dynamic_rebalance: bool,
-    risk_overlay: bool,
-    ps_threshold: float,
-    transaction_cost: float,
-    stress_test: str,
-    include_delisted: bool,
-    rebalance_frequency: str
+        strategy_name: str,
+        input_file_path: str,
+        start_year: int,
+        end_year: int,
+        growth_threshold: float,
+        top_n: int,
+        hybrid_weighting: bool,
+        dynamic_rebalance: bool,
+        risk_overlay: bool,
+        ps_threshold: float,
+        transaction_cost: float,
+        stress_test: str,
+        include_delisted: bool,
+        rebalance_frequency: str
 ) -> Tuple[Dict[str, float], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any], str]:
     """Performs the core logic of the backtest.
 
     Args:
         strategy_name: The name of the strategy to run.
-        data_file_path: Path to the CSV or JSON file containing market data.
+        input_file_path: Path to the CSV or JSON file containing market data.
         start_year: The start year of the backtest period.
         end_year: The end year of the backtest period.
         growth_threshold: Minimum annual sales growth threshold.
@@ -77,7 +80,7 @@ def _perform_backtest_core_logic(
     click.echo(f"Running backtest for: {strategy_description}")
 
     full_market_data = prepare_market_data(
-        data_file_path, stress_test, start_year, end_year, include_delisted
+        input_file_path, stress_test, start_year, end_year, include_delisted
     )
 
     click.echo(f"Running backtest from {start_year} to {end_year}...")
@@ -109,28 +112,28 @@ def _perform_backtest_core_logic(
 
 
 def _run_strategy_backtest(
-            strategy_name: str,
-            data_file_path: str,
-            start_year: int,
-            end_year: int,
-            growth_threshold: float,
-            top_n: int,
-            hybrid_weighting: bool,
-            dynamic_rebalance: bool,
-            risk_overlay: bool,
-            ps_threshold: float,
-            transaction_cost: float,
-            stress_test: str,
-            include_delisted: bool,
-            rebalance_frequency: str,
-            output: Optional[str],
-            benchmark: str
-    ) -> int:
+        strategy_name: str,
+        input_file_path: str,
+        start_year: int,
+        end_year: int,
+        growth_threshold: float,
+        top_n: int,
+        hybrid_weighting: bool,
+        dynamic_rebalance: bool,
+        risk_overlay: bool,
+        ps_threshold: float,
+        transaction_cost: float,
+        stress_test: str,
+        include_delisted: bool,
+        rebalance_frequency: str,
+        output: Optional[str],
+        benchmark: str
+) -> int:
     """Runs a generic backtest for the specified investment strategy.
 
     Args:
         strategy_name: The name of the strategy to run.
-        data_file_path: Path to the CSV or JSON file containing market data.
+        input_file_path: Path to the CSV or JSON file containing market data.
         start_year: The start year of the backtest period.
         end_year: The end year of the backtest period.
         growth_threshold: Minimum annual sales growth threshold.
@@ -171,7 +174,7 @@ def _run_strategy_backtest(
             strategy_cli_params,
             strategy_description
         ) = _perform_backtest_core_logic(
-            strategy_name, data_file_path, start_year, end_year,
+            strategy_name, input_file_path, start_year, end_year,
             growth_threshold, top_n, hybrid_weighting, dynamic_rebalance,
             risk_overlay, ps_threshold, transaction_cost, stress_test,
             include_delisted, rebalance_frequency
@@ -179,7 +182,7 @@ def _run_strategy_backtest(
 
         format_and_output_results(
             final_performance_metrics, output, strategy_name, strategy_description,
-            start_year, end_year, data_file_path, rebalance_frequency,
+            start_year, end_year, input_file_path, rebalance_frequency,
             dynamic_rebalance, transaction_cost, stress_test, include_delisted,
             benchmark, strategy_cli_params, yearly_display_returns, portfolio_history
         )
@@ -361,18 +364,23 @@ def _execute_backtest_loop(
 def cli():
     """Investment Strategy Backtest Tool.
 
-    Provides commands to list available strategies and run backtests.
-    Use 'backtest run --help' for detailed options on running a backtest.
+    Provides commands to list available strategies, run backtests,
+    and manage market data.
     """
     pass  # Click manages context.
 
 
+cli.add_command(data_command)  # Add the 'data' subcommand
+
+
 @cli.command(name="run")
 @click.argument("strategy_name", metavar="STRATEGY")
-@click.argument(
-    "data_file_path",
-    metavar="DATA_FILE",
-    type=click.Path(exists=True, dir_okay=False, readable=True)
+@click.option(
+    "--input", "-i", "input_file_path",
+    metavar="INPUT_FILE_PATH",
+    type=click.Path(exists=True, dir_okay=False, readable=True, resolve_path=True),
+    required=True,
+    help="Path to the input file (CSV or JSON) containing historical market data."
 )
 @click.option(
     "--start-year", "-s",
@@ -463,12 +471,11 @@ def cli():
 )
 @click.pass_context
 def run_command(ctx: click.Context, **kwargs: Any):
-    """Runs a backtest for the specified STRATEGY using DATA_FILE.
-
-    Args:
-        ctx: The Click context object.
-        **kwargs: Keyword arguments containing all CLI options and arguments.
+    """Runs a backtest for the specified STRATEGY using the data from the
+    provided INPUT_FILE_PATH.
     """
+    # The Args: section mentioning ctx and kwargs has been removed from the docstring
+    # as Click automatically lists defined arguments and options.
     if kwargs['start_year'] > kwargs['end_year']:
         click.echo("Error: start_year cannot be greater than end_year.", err=True)
         ctx.exit(1)
@@ -477,22 +484,42 @@ def run_command(ctx: click.Context, **kwargs: Any):
 
 
 @cli.command(name="list")
-def list_strategies_command():
-    """Lists all available investment strategies."""
+def list_command():
+    """Lists all available investment strategies and data fetchers."""
     strategies_list = list_available_strategies()
+
     if not strategies_list:
         click.echo("No investment strategies found.")
-        return
+    else:
+        # Sort the list of strategies alphabetically by name.
+        sorted_strategies_list = sorted(strategies_list, key=lambda s: s.get('name', '').lower())
+        click.echo(click.style("Available investment strategies for backtesting:", fg="cyan", bold=True))
+        for strategy_info in sorted_strategies_list:
+            click.echo(
+                f"- {click.style(strategy_info.get('name', 'Unknown Strategy'), bold=True)}: "
+                f"{strategy_info.get('description', 'No description available.')}"
+            )
 
-    # Sort the list of strategies alphabetically by name.
-    sorted_strategies_list = sorted(strategies_list, key=lambda s: s.get('name', '').lower())
+    click.echo()  # Add a blank line for separation
 
-    click.echo("Available investment strategies:")
-    for strategy_info in sorted_strategies_list:
-        click.echo(
-            f"- {strategy_info.get('name', 'Unknown Strategy')}: "
-            f"{strategy_info.get('description', 'No description available.')}"
-        )
+    # List data fetchers, sorted alphabetically
+    click.echo(click.style("Available data fetchers:", fg="cyan", bold=True))
+    if not AVAILABLE_FETCHERS:
+        click.echo("No data fetchers defined.")
+    else:
+        for fetcher_name in sorted(AVAILABLE_FETCHERS):  # Sort fetchers alphabetically
+            if fetcher_name == 'demo':
+                # Make 'demo' stand out and add a note
+                click.echo(f"- {click.style(fetcher_name, fg='green', bold=True)}"
+                           f"{click.style(' (generates synthetic data)', dim=True)}")
+            else:
+                click.echo(f"- {fetcher_name}")
+
+    click.echo(
+        f"\n{click.style('Note:', bold=True)} Use "
+        f"{click.style(f'backtest data <STRATEGY> --fetcher [{'|'.join(AVAILABLE_FETCHERS)}]', fg='yellow')}"
+        f" to use a specific fetcher."
+    )
 
 
 if __name__ == "__main__":

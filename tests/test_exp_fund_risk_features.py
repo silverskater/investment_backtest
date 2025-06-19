@@ -46,7 +46,8 @@ class TestExpFundRiskFeatures:
 
         runner = CliRunner()
         result_hold = runner.invoke(cli, [
-            "run", "exp_fund", data_file_hold,
+            "run", "exp_fund",
+            "--input", data_file_hold,
             '--start-year', str(start_year),
             '--end-year', str(end_year),
             '--dynamic-rebalance',
@@ -84,7 +85,8 @@ class TestExpFundRiskFeatures:
         output_json_path_low_thresh = tmp_path / "dynamic_rebalance_low_thresh_results.json"
 
         result_low_thresh = runner.invoke(cli, [
-            "run", "exp_fund", data_file_low_thresh,
+            "run", "exp_fund",
+            "--input", data_file_low_thresh,
             '--start-year', str(start_year),
             '--end-year', str(end_year),
             '--dynamic-rebalance',
@@ -119,7 +121,8 @@ class TestExpFundRiskFeatures:
         )
         output_json_path_low_ps = tmp_path / "risk_overlay_low_ps.json"
         result_low_ps = runner.invoke(cli, [
-            "run", "exp_fund", data_file_low_ps,
+            "run", "exp_fund",
+            "--input", data_file_low_ps,
             '--start-year', str(start_year),
             '--end-year', str(end_year),
             '--risk-overlay', '--ps-threshold', '10.0',  # Explicitly set high threshold.
@@ -139,7 +142,8 @@ class TestExpFundRiskFeatures:
             custom_data_modifier=remove_ps_column
         )
         result_no_ps = runner.invoke(cli, [
-            "run", "exp_fund", data_file_no_ps,
+            "run", "exp_fund",
+            "--input", data_file_no_ps,
             '--start-year', str(start_year),
             '--end-year', str(end_year),
             '--risk-overlay', '--ps-threshold', '2.0'  # Low threshold.
@@ -166,7 +170,8 @@ class TestExpFundRiskFeatures:
             custom_data_modifier=make_ps_non_numeric
         )
         result_bad_ps = runner.invoke(cli, [
-            "run", "exp_fund", data_file_bad_ps,
+            "run", "exp_fund",
+            "--input", data_file_bad_ps,
             '--start-year', str(start_year),
             '--end-year', str(end_year),
             '--risk-overlay', '--ps-threshold', '2.0'
@@ -202,7 +207,8 @@ class TestExpFundRiskFeatures:
         output_json_path_2008 = tmp_path / "stress_2008_results.json"
 
         result_2008 = runner.invoke(cli, [
-            "run", "exp_fund", data_file_2008,
+            "run", "exp_fund",
+            "--input", data_file_2008,
             '--start-year', str(start_year_2008),
             '--end-year', str(end_year_2008),
             '--stress-test', '2008crisis',
@@ -225,7 +231,8 @@ class TestExpFundRiskFeatures:
         )
         output_json_path_2022 = tmp_path / "stress_2022_results.json"
         result_2022 = runner.invoke(cli, [
-            "run", "exp_fund", data_file_2022,
+            "run", "exp_fund",
+            "--input", data_file_2022,
             '--start-year', str(start_year_2022),
             '--end-year', str(end_year_2022),
             '--stress-test', '2022ratehike',
@@ -265,7 +272,8 @@ class TestExpFundRiskFeatures:
         runner = CliRunner()
 
         result_quarterly = runner.invoke(cli, [
-            "run", "exp_fund", data_file,
+            "run", "exp_fund",
+            "--input", data_file,
             '--start-year', str(start_year),
             '--end-year', str(end_year),
             '--rebalance-frequency', 'quarterly'
@@ -275,7 +283,8 @@ class TestExpFundRiskFeatures:
         assert "Backtest Results:" in result_quarterly.output
 
         result_monthly = runner.invoke(cli, [
-            "run", "exp_fund", data_file,
+            "run", "exp_fund",
+            "--input", data_file,
             '--start-year', str(start_year),
             '--end-year', str(end_year),
             '--rebalance-frequency', 'monthly'

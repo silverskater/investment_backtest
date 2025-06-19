@@ -1,6 +1,6 @@
 """Pytest configuration and shared fixtures for the test suite."""
 import pytest
-from backtest.example_data import generate_example_data
+from data_provider.fetchers.demo_fetcher import _generate_demo_data_logic as generate_example_data
 
 
 @pytest.fixture(scope="session")

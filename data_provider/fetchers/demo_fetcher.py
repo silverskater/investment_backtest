@@ -1,62 +1,27 @@
-"""Generates synthetic market data for investment strategy backtesting.
-
-This module provides functionality to create realistic-looking financial data
-for multiple companies across several years. The generated data includes
-various financial metrics, with attempts to model some correlations between
-them. Data generation can be tailored for specific investment strategies.
 """
-import os
-import sys
+Fetcher implementation for generating synthetic/demo market data.
+"""
 from datetime import datetime
-from typing import Dict
+from typing import List, Dict, Any, Optional
 
-import click
 import numpy as np
 import pandas as pd
+import click  # For click.echo, if needed for warnings within generation
 
-# --- Constants ---
-# Define required and optional columns for each strategy.
-STRATEGY_COLUMNS = {
-    'exp_fund': {
-        'required': ['year', 'symbol', 'market_cap', 'market_cap_rank',
-                     'sales_growth_5y', 'annual_return', 'share_price'],
-        'optional': ['ps_ratio', 'shares_outstanding'],
-    },
-    'dgi': {
-        'required': ['year', 'symbol', 'share_price', 'div_growth_streak',
-                     'payout_ratio', 'eps_cagr_3y', 'roe', 'debt_equity',
-                     'industry_debt_equity', 'sp_quality', 'dividend_yield',
-                     'div_growth_5y', 'quality_score'],
-        'optional': ['market_cap', 'market_cap_rank', 'sales_growth_5y',
-                     'annual_return', 'ps_ratio', 'shares_outstanding'],
-    },
-    'value_play': {
-        'required': [
-            'year', 'symbol', 'share_price', 'annual_return',  # Basic
-            'pe_ratio', 'sector_median_pe', 'pb_ratio', 'sector_median_pb',  # Undervaluation
-            'fcf_yield', 'sector_median_fcf_yield', 'tangible_book_value_per_share',
-            'debt_equity', 'industry_avg_debt_equity', 'total_debt', 'net_current_asset_value',  # Financial Health
-            'current_ratio', 'positive_ni_5y_streak', 'roe',
-            'margin_of_safety', 'total_book_value',  # Margin of Safety
-            'sp_quality', 'eps_growth_5y', 'significant_insider_activity',  # Quality
-            'composite_value_score', 'quality_score',  # For sorting & weighting
-            'sector'  # For sector medians
-        ],
-        'optional': ['market_cap', 'market_cap_rank', 'ps_ratio', 'shares_outstanding'],
-    }
-}
-
-# Define default parameters for data generation.
-DEFAULT_START_YEAR_OFFSET = 10  # Default backtest period is 10 years ending last year.
-DEFAULT_NUM_COMPANIES = 50
-NUM_IDEAL_DGI_STOCKS_PER_YEAR = 3  # Number of stocks to ensure pass DGI criteria.
-NUM_IDEAL_VALUE_STOCKS_PER_YEAR = 4  # Number of stocks to ensure pass Value criteria.
+from ..base_fetcher import FetcherInterface
+from ..constants import (
+    STRATEGY_COLUMNS,
+    DEFAULT_DEMO_START_YEAR_OFFSET,
+    DEFAULT_DEMO_NUM_COMPANIES,
+    NUM_IDEAL_DGI_STOCKS_PER_YEAR,
+    NUM_IDEAL_VALUE_STOCKS_PER_YEAR
+)
 
 
 # --- Helper Functions for Data Generation ---
 
 def _generate_core_arrays(
-    rng: np.random.Generator, start_year: int, end_year: int, num_companies: int
+        rng: np.random.Generator, start_year: int, end_year: int, num_companies: int
 ):
     """Generates core arrays for year, symbol, and market cap ranks.
 
@@ -75,18 +40,15 @@ def _generate_core_arrays(
     """
     num_years = end_year - start_year + 1
     total_rows = num_years * num_companies
-
     years_array = np.repeat(np.arange(start_year, end_year + 1), num_companies)
     symbols_array = np.tile(
         [f'STOCK{i:03d}' for i in range(1, num_companies + 1)], num_years
     )
-
     # Generate Market Cap Ranks with Year-to-Year Consistency.
     yearly_ranks_list = []
     current_year_ranks = np.arange(1, num_companies + 1)
     rng.shuffle(current_year_ranks)
     yearly_ranks_list.append(current_year_ranks)
-
     for _ in range(1, num_years):
         previous_year_ranks = yearly_ranks_list[-1].copy()
         # Swap neighboring ranks with a 20% probability for minor shifts.
@@ -99,22 +61,20 @@ def _generate_core_arrays(
             previous_year_ranks[idx], previous_year_ranks[idx + 1] = \
                 previous_year_ranks[idx + 1], previous_year_ranks[idx]
         yearly_ranks_list.append(previous_year_ranks)
-
     market_cap_ranks_array = np.concatenate(yearly_ranks_list)
-
     return years_array, symbols_array, market_cap_ranks_array, total_rows
 
 
 def _generate_share_prices_over_time(
-    rng: np.random.Generator,
-    symbols_array: np.ndarray,
-    num_companies_total: int,
-    total_rows: int,
-    base_price_low: float,
-    base_price_high: float,
-    annual_change_loc: float,
-    annual_change_scale: float,
-    min_price: float = 1.0
+        rng: np.random.Generator,
+        symbols_array: np.ndarray,
+        num_companies_total: int,
+        total_rows: int,
+        base_price_low: float,
+        base_price_high: float,
+        annual_change_loc: float,
+        annual_change_scale: float,
+        min_price: float = 1.0
 ) -> np.ndarray:
     """Generates share prices iteratively over time for all stocks.
 
@@ -134,15 +94,12 @@ def _generate_share_prices_over_time(
     """
     base_prices = rng.uniform(base_price_low, base_price_high, size=num_companies_total)
     share_prices_array = np.zeros(total_rows)
-
     # Assumes symbols_array[:num_companies_total] contains unique symbols for the first year.
     unique_symbols_first_year = symbols_array[:num_companies_total]
     stock_base_price_map = {symbol: base_prices[i] for i, symbol in enumerate(unique_symbols_first_year)}
-
     for i in range(total_rows):
         symbol = symbols_array[i]
         is_first_year_for_stock = (i < num_companies_total)
-
         if is_first_year_for_stock:
             share_prices_array[i] = stock_base_price_map[symbol]
         else:
@@ -156,9 +113,9 @@ def _generate_share_prices_over_time(
 
 
 def _calculate_annual_returns_from_prices(
-    share_prices_array: np.ndarray,
-    num_companies_total: int,
-    total_rows: int
+        share_prices_array: np.ndarray,
+        num_companies_total: int,
+        total_rows: int
 ) -> np.ndarray:
     """Calculates annual returns in percentage from a share prices array.
 
@@ -173,22 +130,21 @@ def _calculate_annual_returns_from_prices(
     annual_returns_array = np.zeros(total_rows)
     for i in range(total_rows):
         is_not_first_year_for_stock = (i >= num_companies_total)
-
         if is_not_first_year_for_stock:
             prev_row_absolute_idx = i - num_companies_total
             prev_price = share_prices_array[prev_row_absolute_idx]
             current_price = share_prices_array[i]
-            if prev_price > 0:  # Avoid division by zero.
+            if prev_price > 0:
                 annual_returns_array[i] = ((current_price - prev_price) / prev_price) * 100.0
-            # else: annual_returns_array[i] remains 0.0 (for cases like prev_price <= 0).
-        # else: annual_returns_array[i] remains 0.0 (correct for the first year).
+        # else: annual_returns_array[i] remains 0.0 (for cases like prev_price <= 0).
+    # else: annual_returns_array[i] remains 0.0 (correct for the first year).
     return annual_returns_array
 
 
 def _generate_exp_fund_data(
-    rng: np.random.Generator, years_array: np.ndarray,
-    symbols_array: np.ndarray, market_cap_ranks_array: np.ndarray,
-    total_rows: int
+        rng: np.random.Generator, years_array: np.ndarray,
+        symbols_array: np.ndarray, market_cap_ranks_array: np.ndarray,
+        total_rows: int
 ) -> pd.DataFrame:
     """Generates synthetic data specific to the 'exp_fund' strategy.
 
@@ -203,7 +159,7 @@ def _generate_exp_fund_data(
         A pandas DataFrame with data for the 'exp_fund' strategy.
     """
     # Market Cap based on rank.
-    base_market_caps = rng.integers(10 ** 10, 10 ** 12, size=total_rows)  # $10B-$1T.
+    base_market_caps = rng.integers(10 ** 10, 10 ** 12, size=total_rows)
     # Higher ranks (lower numbers) should generally have higher market caps.
     # Using inverse square root of rank for a non-linear scaling.
     rank_adjustment_factor = 1.0 / np.sqrt(market_cap_ranks_array)
@@ -633,37 +589,19 @@ def _generate_value_play_data(
     return data_df
 
 
-def generate_example_data(
+def _generate_demo_data_logic(
         strategy_name: str,
-        start_year: int = None,
-        end_year: int = None,
-        num_companies: int = DEFAULT_NUM_COMPANIES,
-        seed: int = None
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+        num_companies: int = DEFAULT_DEMO_NUM_COMPANIES,
+        seed: Optional[int] = None
 ) -> pd.DataFrame:
-    """Generates example market data for a specific strategy.
-
-    Args:
-        strategy_name: The name of the strategy ('exp_fund', 'dgi', or 'value_play').
-        start_year: The first year for data generation.
-            Defaults to `DEFAULT_START_YEAR_OFFSET` years before the `end_year`.
-        end_year: The last year for data generation.
-            Defaults to the year before the current year.
-        num_companies: The number of unique companies to generate data for.
-        seed: An optional seed for the random number generator for reproducibility.
-
-    Returns:
-        A pandas DataFrame containing the generated example data.
-
-    Raises:
-        ValueError: If `start_year` is greater than `end_year` or if
-            `strategy_name` is not supported.
-        NotImplementedError: If data generation for the strategy is not implemented.
-    """
+    """Core logic for generating example market data for a specific strategy."""
     rng = np.random.default_rng(seed) if seed is not None else np.random.default_rng()
 
     current_system_year = datetime.now().year
     effective_end_year = end_year if end_year is not None else current_system_year - 1
-    effective_start_year = start_year if start_year is not None else effective_end_year - DEFAULT_START_YEAR_OFFSET
+    effective_start_year = start_year if start_year is not None else effective_end_year - DEFAULT_DEMO_START_YEAR_OFFSET
 
     if effective_start_year > effective_end_year:
         raise ValueError("start_year cannot be greater than end_year.")
@@ -689,148 +627,119 @@ def generate_example_data(
             rng, years_array, symbols_array, market_cap_ranks_array, total_rows
         )
     else:
-        # This case should ideally not be reached due to the check above.
         raise NotImplementedError(f"Data generation not implemented for strategy: {strategy_name}")
 
+    # Ensure all required and optional columns are present and ordered correctly
     required_cols = STRATEGY_COLUMNS[strategy_name]['required']
     optional_cols = STRATEGY_COLUMNS[strategy_name]['optional']
-    current_cols = list(data_df.columns)
-    final_cols_ordered = []
+    all_defined_cols = required_cols + optional_cols
 
-    for col in required_cols:
-        if col in current_cols:
-            final_cols_ordered.append(col)
-        else:
-            data_df[col] = pd.NA
-            final_cols_ordered.append(col)
-            click.echo(
-                f"Warning: Required column '{col}' for strategy '{strategy_name}' "
-                "was missing and added as NA.",
-                err=True
-            )
+    # Add missing columns with NA
+    for col in all_defined_cols:
+        if col not in data_df.columns:
+            data_df[col] = pd.NA  # Use pd.NA for better type handling with nullable dtypes
+            # Consider a warning if a required column is missing and added.
+            # if col in required_cols:
+            #     click.echo(f"Warning: Required demo column '{col}' for strategy '{strategy_name}' was missing and added as NA.", err=True)
 
-    for col in optional_cols:
-        if col in current_cols and col not in final_cols_ordered:
-            final_cols_ordered.append(col)
+    # Order columns: year, symbol, then others as defined in STRATEGY_COLUMNS
+    final_ordered_cols = []
+    if 'year' in all_defined_cols: final_ordered_cols.append('year')
+    if 'symbol' in all_defined_cols: final_ordered_cols.append('symbol')
 
-    for col in current_cols:
-        if col not in final_cols_ordered:
-            final_cols_ordered.append(col)
+    for col in all_defined_cols:
+        if col not in final_ordered_cols and col in data_df.columns:
+            final_ordered_cols.append(col)
 
-    data_df = data_df[final_cols_ordered]
+    # Add any extra generated columns not in STRATEGY_COLUMNS (should be rare for demo)
+    for col in data_df.columns:
+        if col not in final_ordered_cols:
+            final_ordered_cols.append(col)
+
+    data_df = data_df[final_ordered_cols]
     data_df = data_df.sort_values(by=['year', 'symbol']).reset_index(drop=True)
-
     return data_df
 
 
-@click.command()
-@click.argument(
-    'strategy_name',
-    metavar='STRATEGY',
-    type=click.Choice(list(STRATEGY_COLUMNS.keys()), case_sensitive=False),
-)
-@click.argument(
-    'output_path',
-    required=False,
-    type=click.Path(dir_okay=False, writable=True)
-)
-@click.option(
-    "--start-year", "-s",
-    default=None,
-    type=int,
-    help=f"Start year for the data. Defaults to {DEFAULT_START_YEAR_OFFSET} years before end_year."
-)
-@click.option(
-    "--end-year", "-e",
-    default=None,
-    type=int,
-    help="End year for the data. Defaults to the year before the current year."
-)
-@click.option(
-    "--num-companies", "-n",
-    default=DEFAULT_NUM_COMPANIES,
-    type=click.IntRange(min=1),
-    show_default=True,
-    help="Number of companies to generate."
-)
-@click.option(
-    "--seed",
-    type=int,
-    default=None,
-    help="Random seed for reproducibility."
-)
-def cli(
-        strategy_name: str,
-        output_path: str = None,
-        start_year: int = None,
-        end_year: int = None,
-        num_companies: int = DEFAULT_NUM_COMPANIES,
-        seed: int = None
-):
-    """Creates a CSV file with synthetic market data for backtesting a STRATEGY.
-
-    This command generates financial market data tailored for the specified
-    strategy and saves it to a CSV file.
-
-    If OUTPUT_PATH is not provided, it defaults to
-    './data/[strategy_name].example_data.[counter].csv'.
-
-    Args:
-        strategy_name: The name of the strategy for which to generate data.
-        output_path: Optional path to save the generated CSV file.
-        start_year: The first year for data generation.
-        end_year: The last year for data generation.
-        num_companies: The number of unique companies to generate data for.
-        seed: An optional seed for the random number generator.
+class DemoFetcher(FetcherInterface):
     """
-    if output_path is None:
-        default_dir = "data"
-        if not os.path.exists(default_dir):
+    Generates synthetic market data based on predefined strategy templates.
+    This fetcher is used for demonstration and testing purposes.
+    """
+
+    def __init__(self,
+                 strategy_template_name: str,
+                 start_year: Optional[int] = None,
+                 end_year: Optional[int] = None,
+                 num_companies: Optional[int] = None,
+                 seed: Optional[int] = None,
+                 api_key: Optional[str] = None, **kwargs):  # api_key and kwargs for interface compliance
+        super().__init__(api_key, **kwargs)
+        self.strategy_template_name = strategy_template_name
+        self.start_year = start_year
+        self.end_year = end_year
+        self.num_companies = num_companies if num_companies is not None else DEFAULT_DEMO_NUM_COMPANIES
+        self.seed = seed
+
+    def fetch_data(self, symbols: List[str], start_date: str, end_date: str, **kwargs) -> pd.DataFrame:
+        """
+        Generates demo data.
+        Ignores symbols, start_date, end_date if constructor params were set.
+        Otherwise, it can derive num_companies from len(symbols) and years from dates.
+        """
+        # Prioritize constructor/kwargs parameters for generation
+        num_companies_to_gen = self.num_companies
+        if not symbols and not self.num_companies:  # Default if nothing specified
+            num_companies_to_gen = DEFAULT_DEMO_NUM_COMPANIES
+        elif symbols and self.num_companies is None:  # If num_companies not set in init, use symbols length
+            num_companies_to_gen = len(symbols)
+
+        # Determine start_year and end_year
+        # Priority: constructor -> derived from start_date/end_date -> defaults
+        current_system_year = datetime.now().year
+
+        gen_end_year = self.end_year
+        if gen_end_year is None and end_date:
             try:
-                os.makedirs(default_dir, exist_ok=True)
-            except OSError as e:
-                click.echo(f"Error creating default directory '{default_dir}': {e}", err=True)
-                sys.exit(1)
+                gen_end_year = pd.to_datetime(end_date).year
+            except ValueError:
+                gen_end_year = current_system_year - 1
+        elif gen_end_year is None:
+            gen_end_year = current_system_year - 1
 
-        counter = 1
-        while True:
-            default_filename = f"{strategy_name}.example_data.{counter:02d}.csv"
-            temp_output_path = os.path.join(default_dir, default_filename)
-            if not os.path.exists(temp_output_path):
-                output_path = temp_output_path
-                break
-            counter += 1
+        gen_start_year = self.start_year
+        if gen_start_year is None and start_date:
+            try:
+                gen_start_year = pd.to_datetime(start_date).year
+            except ValueError:
+                gen_start_year = gen_end_year - DEFAULT_DEMO_START_YEAR_OFFSET
+        elif gen_start_year is None:
+            gen_start_year = gen_end_year - DEFAULT_DEMO_START_YEAR_OFFSET
 
-    click.echo(f"Generating synthetic market data for strategy '{strategy_name}'...")
-    try:
-        data_df = generate_example_data(
-            strategy_name=strategy_name,
-            start_year=start_year,
-            end_year=end_year,
-            num_companies=num_companies,
-            seed=seed
+        if gen_start_year > gen_end_year:
+            click.echo(
+                f"Warning: DemoFetcher start_year ({gen_start_year}) is after end_year ({gen_end_year}). Returning empty DataFrame.",
+                err=True)
+            return pd.DataFrame()
+
+        df = _generate_demo_data_logic(
+            strategy_name=self.strategy_template_name,
+            start_year=gen_start_year,
+            end_year=gen_end_year,
+            num_companies=num_companies_to_gen,
+            seed=self.seed
         )
-    except ValueError as e:
-        click.echo(f"Error generating data: {e}", err=True)
-        sys.exit(1)
-    except NotImplementedError as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+        # The DemoFetcher output is already in the "year, symbol, metrics..." format.
+        # The DataMapper will handle ensuring it matches STRATEGY_COLUMNS exactly.
+        return df
 
-    try:
-        output_directory = os.path.dirname(os.path.abspath(output_path))
-        if output_directory and not os.path.exists(output_directory):
-            os.makedirs(output_directory, exist_ok=True)
-
-        data_df.to_csv(output_path, index=False)
-        click.echo(f"Success: Example data saved to {output_path}")
-    except IOError as e:
-        click.echo(f"Error: Failed to save data to {output_path}. {e}", err=True)
-        sys.exit(1)
-    except Exception as e:  # pylint: disable=broad-except
-        click.echo(f"An unexpected error occurred while saving data: {e}", err=True)
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    cli()  # pylint: disable=no-value-for-parameter
+    def get_supported_fields(self) -> List[str]:
+        """
+        Returns a list of all possible field names this demo fetcher can generate
+        across all strategy templates.
+        """
+        all_fields = set()
+        for strategy_info in STRATEGY_COLUMNS.values():
+            all_fields.update(strategy_info['required'])
+            all_fields.update(strategy_info['optional'])
+        return sorted(list(all_fields))

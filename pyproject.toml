@@ -11,10 +11,24 @@ numpy = "^2.3.0"
 pandas = "^2.2.3"
 requests = "^2.32.3"
 click = "^8.2.1"
+python-dotenv = "^1.1.0"
+
+# Optional dependencies for data providers
+yfinance = { version = "^0.2.0", optional = true }
+alpha-vantage = { version = "^2.3.0", optional = true }
+# For IB API, the package name might be 'ibapi' or similar,
+# and installation can be more involved.
+# ibapi = { version = "...", optional = true }
+
+[tool.poetry.extras]
+provider_yfinance = ["yfinance"]
+provider_alphavantage = ["alpha-vantage"]
+# provider_ib = ["ibapi"]
+all_providers = ["yfinance", "alpha-vantage"] #, "ibapi"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.0"
-pytest-cov = "^5.0.0" # Added pytest-cov
+pytest-cov = "^5.0.0"
 
 [build-system]
 requires = ["poetry-core"]
@@ -23,8 +37,6 @@ build-backend = "poetry.core.masonry.api"
 [tool.poetry.scripts]
 # Investment strategy backtest tool supporting multiple strategies
 backtest = "backtest.cli:cli"
-# Creates synthetic market data for backtesting investment strategies
-generate_example_data = "backtest.example_data:cli"
 
 [tool.pytest.ini_options]
 #testpaths = ["tests"]

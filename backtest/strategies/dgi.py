@@ -5,10 +5,13 @@ financial stability, and aims for long-term compounding of income and capital.
 """
 from typing import Any, Dict
 
-import numpy as np
 import pandas as pd
 
 from .base import Strategy
+from backtest.utils.quality_utils import (
+    map_sp_quality_to_numeric,
+    MIN_SP_QUALITY_NUMERIC
+)
 
 
 class DgiStrategy(Strategy):
@@ -18,30 +21,7 @@ class DgiStrategy(Strategy):
     growth, ROE, debt levels, and S&P Quality Rank. Portfolio weights are
     determined by a hybrid approach combining dividend yield, dividend growth
     rate, and a quality score.
-
-    Attributes:
-        SP_QUALITY_RANK_MAPPING: A dictionary mapping S&P quality ranks to
-                                 numerical values.
-        MIN_SP_QUALITY_NUMERIC: The minimum numerical S&P quality rank required.
     """
-
-    SP_QUALITY_RANK_MAPPING = {
-        'A+': 6, 'A': 5, 'A-': 4,
-        'B+': 3, 'B': 2, 'B-': 1,
-    }
-    MIN_SP_QUALITY_NUMERIC = SP_QUALITY_RANK_MAPPING['B+']
-
-    def _map_sp_quality_to_numeric(self, quality_series: pd.Series) -> pd.Series:
-        """Maps S&P quality string ranks to numerical values.
-
-        Args:
-            quality_series: A pandas Series containing S&P quality ranks as strings.
-
-        Returns:
-            A pandas Series with numerical quality ranks. Unmapped values are
-            filled with 0.
-        """
-        return quality_series.map(self.SP_QUALITY_RANK_MAPPING).fillna(0)
 
     def execute_strategy(
             self, data_for_period: pd.DataFrame, params: Dict[str, Any]
@@ -63,22 +43,29 @@ class DgiStrategy(Strategy):
         """
         candidates_df = data_for_period.copy()
 
+        # Use the imported utility function and constant
         if 'sp_quality' in candidates_df.columns:
-            candidates_df['sp_quality_numeric'] = self._map_sp_quality_to_numeric(
+            candidates_df['sp_quality_numeric'] = map_sp_quality_to_numeric(
                 candidates_df['sp_quality']
             )
         else:
-            print("Warning: 'sp_quality' column not found. Skipping S&P Quality Rank filter.")
-            candidates_df['sp_quality_numeric'] = np.nan
+            print("Warning: 'sp_quality' column not found for DgiStrategy. "
+                  "Skipping S&P Quality Rank filter.")
+            # Assign a value that will fail the quality check if column is missing
+            candidates_df['sp_quality_numeric'] = MIN_SP_QUALITY_NUMERIC - 1 # Or np.nan, but a low number is safer for comparison
+
+        # Ensure sp_quality_numeric exists before using it in the condition
+        if 'sp_quality_numeric' not in candidates_df.columns:
+             candidates_df['sp_quality_numeric'] = MIN_SP_QUALITY_NUMERIC - 1 # Ensure it exists and fails filter
 
         screened_df = candidates_df[
-            (candidates_df.get('div_growth_streak', pd.Series(dtype=float)) >= 10) &
-            (candidates_df.get('payout_ratio', pd.Series(dtype=float)) <= 0.60) &
-            (candidates_df.get('eps_cagr_3y', pd.Series(dtype=float)) >= 0.05) &
-            (candidates_df.get('roe', pd.Series(dtype=float)) >= 0.15) &
-            (candidates_df.get('debt_equity', pd.Series(dtype=float)) <=
-             candidates_df.get('industry_debt_equity', pd.Series(dtype=float))) &
-            (candidates_df.get('sp_quality_numeric', pd.Series(dtype=float)) >= self.MIN_SP_QUALITY_NUMERIC)
+            (candidates_df.get('div_growth_streak', pd.Series(dtype=float)).fillna(0) >= 10) & # Added fillna for robustness
+            (candidates_df.get('payout_ratio', pd.Series(dtype=float)).fillna(1.0) <= 0.60) & # Added fillna
+            (candidates_df.get('eps_cagr_3y', pd.Series(dtype=float)).fillna(float('-inf')) >= 0.05) & # Added fillna
+            (candidates_df.get('roe', pd.Series(dtype=float)).fillna(float('-inf')) >= 0.15) & # Added fillna
+            (candidates_df.get('debt_equity', pd.Series(dtype=float)).fillna(float('inf')) <=
+             candidates_df.get('industry_debt_equity', pd.Series(dtype=float)).fillna(float('inf'))) & # Added fillna
+            (candidates_df['sp_quality_numeric'] >= MIN_SP_QUALITY_NUMERIC) # Use imported constant
         ].copy()
 
         if screened_df.empty:
@@ -88,48 +75,61 @@ class DgiStrategy(Strategy):
             }
 
         required_weighting_cols = ['dividend_yield', 'div_growth_5y', 'quality_score']
-        missing_weighting_cols = [col for col in required_weighting_cols if col not in screened_df.columns]
+        # Check if required weighting columns are present AND have non-NaN values for calculation
+        missing_weighting_cols = [
+            col for col in required_weighting_cols
+            if col not in screened_df.columns or screened_df[col].isnull().all()
+        ]
+
 
         if missing_weighting_cols:
-            print(f"Warning: Missing columns for DGI weighting: {missing_weighting_cols}. "
-                  "Cannot calculate weights. Returning empty portfolio.")
-            return {
-                'portfolio': pd.DataFrame(columns=['symbol', 'weight', 'share_price']),
-                'metrics': DgiStrategy.calculate_metrics(pd.DataFrame())
-            }
-
-        screened_df['raw_weight_score'] = (
-                0.50 * screened_df['dividend_yield'].fillna(0) +
-                0.30 * screened_df['div_growth_5y'].fillna(0) +
-                0.20 * screened_df['quality_score'].fillna(0)
-        )
-
-        if screened_df['raw_weight_score'].sum() <= 0:
-            print("Warning: Raw weight scores are not positive. Falling back to equal weight for selected DGI stocks.")
+            # Fallback to equal weighting if weighting columns are missing or all NaN
+            print(f"Warning: Missing or all-NaN columns for DGI weighting: {missing_weighting_cols}. "
+                  "Falling back to equal weight for selected stocks.")
             screened_df['weight'] = 1.0 / len(screened_df) if len(screened_df) > 0 else 0.0
         else:
-            screened_df.loc[screened_df['raw_weight_score'] < 0, 'raw_weight_score'] = 0
-            screened_df['weight'] = screened_df['raw_weight_score'] / screened_df['raw_weight_score'].sum()
+             # Use fillna(0) for weighting calculation to treat missing/NaN values as 0 contribution
+            screened_df['raw_weight_score'] = (
+                    0.50 * screened_df['dividend_yield'].fillna(0) +
+                    0.30 * screened_df['div_growth_5y'].fillna(0) +
+                    0.20 * screened_df['quality_score'].fillna(0)
+            )
+
+            if screened_df['raw_weight_score'].sum() <= 0:
+                print("Warning: Raw weight scores are not positive. Falling back to equal weight for selected DGI stocks.")
+                screened_df['weight'] = 1.0 / len(screened_df) if len(screened_df) > 0 else 0.0
+            else:
+                # Ensure no negative weights before normalizing
+                screened_df.loc[screened_df['raw_weight_score'] < 0, 'raw_weight_score'] = 0
+                screened_df['weight'] = screened_df['raw_weight_score'] / screened_df['raw_weight_score'].sum()
+
 
         output_columns = ['symbol', 'weight']
         if 'share_price' in screened_df.columns:
             output_columns.append('share_price')
         else:
+            # Add a placeholder if share_price is missing, though it's required by constants
             screened_df['share_price'] = 1.0
             output_columns.append('share_price')
 
-        for col in ['year', 'annual_return', 'market_cap']:
+        # Add other relevant columns for metrics/reporting if they exist
+        for col in ['year', 'annual_return', 'market_cap', 'dividend_yield', 'div_growth_5y']: # Added yield and growth for metrics
             if col in screened_df.columns and col not in output_columns:
                 output_columns.append(col)
 
         final_portfolio_df = screened_df[output_columns].copy()
+        # Drop rows where weight calculation resulted in NaN (shouldn't happen with fillna, but as a safeguard)
         final_portfolio_df.dropna(subset=['weight'], inplace=True)
 
+        # Re-normalize weights after dropping NaNs, if any were dropped
         if not final_portfolio_df.empty and final_portfolio_df['weight'].sum() > 0:
+             # Check if sum is close to 1.0, normalize if not
             if abs(final_portfolio_df['weight'].sum() - 1.0) > 1e-6:
-                final_portfolio_df['weight'] /= final_portfolio_df['weight'].sum()
+                 final_portfolio_df['weight'] /= final_portfolio_df['weight'].sum()
         elif not final_portfolio_df.empty:
-            final_portfolio_df['weight'] = 1.0 / len(final_portfolio_df)
+             # Fallback to equal weight if sum is zero after dropping NaNs
+             final_portfolio_df['weight'] = 1.0 / len(final_portfolio_df)
+
 
         return {
             'portfolio': final_portfolio_df,
@@ -151,11 +151,14 @@ class DgiStrategy(Strategy):
         """
         avg_yield = 0.0
         avg_div_growth = 0.0
-        if not portfolio_for_period.empty and 'weight' in portfolio_for_period.columns:
+        # Ensure weight column exists and is not all NaN/zero before calculating weighted sums
+        if not portfolio_for_period.empty and 'weight' in portfolio_for_period.columns and portfolio_for_period['weight'].sum() > 0:
             if 'dividend_yield' in portfolio_for_period.columns:
-                avg_yield = (portfolio_for_period['dividend_yield'] * portfolio_for_period['weight']).sum()
+                # Use fillna(0) for the metric itself in case of NaNs in the data
+                avg_yield = (portfolio_for_period['dividend_yield'].fillna(0) * portfolio_for_period['weight']).sum()
             if 'div_growth_5y' in portfolio_for_period.columns:
-                avg_div_growth = (portfolio_for_period['div_growth_5y'] * portfolio_for_period['weight']).sum()
+                 # Use fillna(0) for the metric itself
+                avg_div_growth = (portfolio_for_period['div_growth_5y'].fillna(0) * portfolio_for_period['weight']).sum()
 
         return {
             'dgi_portfolio_size': len(portfolio_for_period),

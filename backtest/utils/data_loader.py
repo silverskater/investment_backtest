@@ -10,7 +10,7 @@ from .stress_tests import apply_stress_test
 
 
 def prepare_market_data(
-        data_file_path: str,
+        input_file_path: str,
         stress_test: str,
         start_year: int,
         end_year: int,
@@ -22,7 +22,7 @@ def prepare_market_data(
     stress test scenarios, and handles options related to delisted companies.
 
     Args:
-        data_file_path: Path to the CSV or JSON file containing market data.
+        input_file_path: Path to the CSV or JSON file containing market data.
         stress_test: Name of the stress test scenario to apply (e.g., 'none',
                      '2008crisis').
         start_year: The start year of the backtest period.
@@ -33,8 +33,8 @@ def prepare_market_data(
     Returns:
         A pandas DataFrame containing the prepared market data.
     """
-    click.echo(f"Loading market data from {data_file_path}...")
-    full_market_data = _load_market_data(data_file_path)
+    click.echo(f"Loading market data from {input_file_path}...")
+    full_market_data = _load_market_data(input_file_path)
 
     if stress_test != 'none':
         click.echo(f"Applying stress test scenario: {stress_test} for period {start_year}-{end_year}")

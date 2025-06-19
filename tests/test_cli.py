@@ -25,9 +25,9 @@ class TestCli:
             'backtest.cli.get_strategy_description',
             lambda name: "Test Strategy Description from Mock"
         )
-        data_file = generic_data_file_factory("exp_fund", seed=1)
+        data_file = generic_data_file_factory("dgi", seed=1)
         runner = CliRunner()
-        result = runner.invoke(cli, ["run", "exp_fund", data_file])
+        result = runner.invoke(cli, ["run", "dgi", "--input", data_file])
 
         assert result.exit_code == 0, result.output
         assert "Backtest Results:" in result.output
@@ -44,8 +44,9 @@ class TestCli:
         )
         data_file = generic_data_file_factory("exp_fund", seed=2)
         runner = CliRunner()
+        # Updated to use --input for data_file
         result = runner.invoke(cli, [
-            "run", "exp_fund", data_file,
+            "run", "exp_fund", "--input", data_file,
             '--start-year', '2020', '--end-year', '2022',
             '--growth-threshold', '0.15', '--top-n', '5',
             '--hybrid-weighting',
@@ -73,7 +74,7 @@ class TestCli:
             output_json_path = temp_json.name
         try:
             result_json = runner.invoke(cli, [
-                "run", strategy, data_file, '--output', output_json_path
+                "run", strategy, "--input", data_file, '--output', output_json_path
             ])
             assert result_json.exit_code == 0, result_json.output
             assert "Full backtest results saved to" in result_json.output
@@ -93,7 +94,7 @@ class TestCli:
             output_csv_path = temp_csv.name
         try:
             result_csv = runner.invoke(cli, [
-                "run", strategy, data_file, '--output', output_csv_path
+                "run", strategy, "--input", data_file, '--output', output_csv_path
             ])
             assert result_csv.exit_code == 0, result_csv.output
             assert f"Metrics saved to {output_csv_path}" in result_csv.output
@@ -105,14 +106,13 @@ class TestCli:
                 os.unlink(output_csv_path)
 
     def test_invalid_data_file(self, monkeypatch):
-        """Tests CLI behavior when a non-existent data file is provided."""
+        """Tests CLI behavior when a non-existent data file is provided via --input."""
         monkeypatch.setattr('backtest.cli.validate_strategy', lambda name: True)
         runner = CliRunner()
-        result = runner.invoke(cli, ["run", "dgi", 'nonexistent_file.csv'])
+        result = runner.invoke(cli, ["run", "dgi", "--input", 'nonexistent_file.csv'])
 
         assert result.exit_code == 2, result.output
-        assert "Error: Invalid value for 'DATA_FILE'" in result.output
-        assert "File 'nonexistent_file.csv' does not exist" in result.output
+        assert "Error: Invalid value for '--input' / '-i': File 'nonexistent_file.csv' does not exist." in result.output
 
     def test_list_command(self, monkeypatch):
         """Tests the 'list' command for displaying available strategies."""
@@ -124,7 +124,7 @@ class TestCli:
         result = runner.invoke(cli, ["list"])
 
         assert result.exit_code == 0, result.output
-        assert "Available investment strategies:" in result.output
+        assert "Available investment strategies for backtesting:" in result.output
         assert "dgi" in result.output
         assert "Dividend Growth Investing (DGI) (Mocked)" in result.output
         assert "value_play" in result.output
@@ -142,7 +142,7 @@ class TestCli:
         )
         data_file = generic_data_file_factory("exp_fund", seed=4)
         runner = CliRunner()
-        result = runner.invoke(cli, ["run", "nonexistent_strategy", data_file])
+        result = runner.invoke(cli, ["run", "nonexistent_strategy", "--input", data_file])
 
         assert result.exit_code == 1, result.output
         assert "Error: Strategy 'nonexistent_strategy' not found" in result.output
@@ -155,17 +155,19 @@ class TestCli:
         result = runner.invoke(cli, ["run"], prog_name='backtest')
 
         assert result.exit_code == 2, result.output
-        assert "Usage: backtest run [OPTIONS] STRATEGY DATA_FILE" in result.output
+        assert "Usage: backtest run [OPTIONS] STRATEGY" in result.output
         assert "Error: Missing argument 'STRATEGY'." in result.output
 
-    def test_missing_data_file_argument(self, monkeypatch):
-        """Tests the 'run' command when the data_file argument is missing."""
+    def test_missing_data_file_option(self, monkeypatch):
+        """Tests the 'run' command when the required --input option is missing."""
         monkeypatch.setattr('backtest.cli.validate_strategy', lambda name: True)
         runner = CliRunner()
+        # Invoking without the required --input
         result = runner.invoke(cli, ["run", "exp_fund"])
 
         assert result.exit_code == 2, result.output
-        assert "Missing argument 'DATA_FILE'" in result.output
+        # Error message for missing --input option
+        assert "Error: Missing option '--input' / '-i'." in result.output
 
     @pytest.mark.parametrize(
         ("test_id, strategy_to_run, cli_options, expected_exit_code, "
@@ -211,7 +213,7 @@ class TestCli:
              ["Backtest Results:"], "value_play"),
             ("dynamic_rebalance_flag", "value_play", ["--dynamic-rebalance"], 0,
              ["Backtest Results:"], "value_play"),
-            ("all_flags_exp_fund", "value_play",
+            ("all_flags_set", "value_play",
              ["--hybrid-weighting", "--risk-overlay", "--dynamic-rebalance"], 0,
              ["Backtest Results:"], "value_play"),
         ]
@@ -233,7 +235,7 @@ class TestCli:
             end_year=2022
         )
         runner = CliRunner()
-        full_cli_args = ["run", strategy_to_run, data_file] + cli_options
+        full_cli_args = ["run", strategy_to_run, "--input", data_file] + cli_options
         result = runner.invoke(cli, full_cli_args)
 
         assert result.exit_code == expected_exit_code, (
@@ -247,3 +249,4 @@ class TestCli:
                 f"Test ID '{test_id}' failed. Snippet '{snippet}' not in output.\n"
                 f"Output:\n{result.output}"
             )
+

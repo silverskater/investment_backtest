@@ -37,7 +37,7 @@ class TestPrepareMarketData:
         mock_load_market_data.return_value = sample_market_data_df.copy()
 
         result_df = prepare_market_data(
-            data_file_path="dummy.csv",
+            input_file_path="dummy.csv",
             stress_test="none",
             start_year=2020,
             end_year=2021,
@@ -65,7 +65,7 @@ class TestPrepareMarketData:
         mock_apply_stress_test.return_value = stressed_df_output
 
         result_df = prepare_market_data(
-            data_file_path="dummy.csv",
+            input_file_path="dummy.csv",
             stress_test="2008crisis",
             start_year=2020,
             end_year=2021,
@@ -103,7 +103,7 @@ class TestPrepareMarketData:
         mock_load_market_data.return_value = sample_market_data_df.copy()
 
         prepare_market_data(
-            data_file_path="dummy.csv",
+            input_file_path="dummy.csv",
             stress_test="none",
             start_year=2020,
             end_year=2021,
@@ -123,7 +123,7 @@ class TestPrepareMarketData:
         mock_load_market_data.return_value = data_without_delisted_col.copy()
 
         prepare_market_data(
-            data_file_path="dummy.csv",
+            input_file_path="dummy.csv",
             stress_test="none",
             start_year=2020,
             end_year=2021,

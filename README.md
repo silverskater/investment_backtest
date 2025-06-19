@@ -21,9 +21,15 @@ poetry install
 
 ## <a name="usage"></a>Usage
 
+The project provides the `backtest` command-line interface.
+You can get help for the main command and its subcommands:
+
 ```bash
 # Display help information and all available options
 backtest --help
+# Basic example - generate some data and backtest the Dividend Growth Investing (DGI) strategy:
+backtest data dgi --output ./data/dgi.market_data.csv
+backtest run dgi --input ./data/dgi.market_data.csv
 ```
 
 The `backtest` command has the following subcommands:
@@ -32,100 +38,68 @@ The `backtest` command has the following subcommands:
 Lists all available investment strategies.
 
 ```bash
-# List all available investment strategies
 backtest list
 ```
 
-### `run <strategy> <data_file>`
-Runs a backtest for the specified `strategy` using the provided `data_file` — see _[Market Data](#market-data)_
-
-**Arguments:**
-- `strategy`: The name of the strategy to run (e.g., `value_play`).
-- `data_file`: Path to CSV or JSON file containing historical market data.
-
-**Options for `run` subcommand:**
-
-#### Basic Options
-- `--start-year, -s`: Start year of the backtest period (default: last year - 10)
-- `--end-year, -e`: End year of the backtest period (default: last year)
-- `--growth-threshold, -g`: Minimum annual sales growth threshold (default: 0.2 or 20%)
-- `--top-n, -n`: Number of top companies to include (default: 10)
-- `--output, -o`: Output file for detailed results (JSON or CSV). The file will include the performance metrics plus the final portfolio composition.
-
-#### Weighting Options
-- `--hybrid-weighting, -hw`: Use hybrid weighting (50% market cap, 50% P/S ratio)
-- `--benchmark, -b`: Benchmark symbol for comparison (default: SPY)
-
-#### Risk Management Options
-- `--dynamic-rebalance, -dr`: Enable dynamic rebalancing when weights deviate >5% from target
-- `--risk-overlay, -ro`: Reduce exposure when portfolio's average P/S exceeds the threshold
-- `--ps-threshold, -pt`: P/S ratio threshold for risk overlay (default: 10.0)
-- `--rebalance-frequency, -rf`: Portfolio rebalancing frequency (annual, quarterly, monthly)
-
-#### Realistic Testing Options
-- `--transaction-cost, -tc`: Transaction cost as slippage percentage (default: 0.5%)
-- `--include-delisted, -id`: Include delisted companies (survivorship bias adjustment)
-- `--stress-test, -st`: Run specific stress test scenario (none, 2008crisis, 2022ratehike)
-
+### `run <strategy>`
+Runs a backtest for the specified `strategy` using a pre-generated market data file — see the [data](#market-data) sub-command
 
 ```bash
 # Backtest
-backtest run <strategy> <data_file> [OPTIONS...]:
-
-# Basic usage with a specific strategy (dgi) and data file
-backtest run dgi data/market_data.csv
-
-# Specify custom parameters
-backtest run exp_fund data/market_data.csv --start-year 2015 --end-year 2023 --growth-threshold 0.15 --top-n 15 --hybrid-weighting
-
-# Backtest with risk management features
-backtest run dgi data/market_data.csv --risk-overlay --ps-threshold 8.5 --dynamic-rebalance
-
-# Backtest a stress test scenario
-backtest run exp_fund data/market_data.csv --stress-test 2008crisis
-
-# Use different rebalancing frequency
-backtest run exp_fund data/market_data.csv --rebalance-frequency quarterly
-
-# Include transaction costs and delisted companies
-backtest run dgi data/market_data.csv --transaction-cost 0.005 --include-delisted
-
-# Save detailed results to a JSON file
-backtest run value_play data/market_data.csv --output results.json
-
-# Save results to a CSV file
-backtest run value_play data/market_data.csv --output results.csv
+backtest run <strategy> --input <INPUT_FILE_PATH> [OPTIONS...]
 ```
 
-## <a name="market-data"></a>Market Data
-
-The market data file should be in CSV or JSON format.
-
-See `STRATEGY_COLUMNS` constant from _backtest/example_data.py_ for required and optional columns. 
-
-### <a name="generate-example-data"></a>Example Data Generation
-
-To simplify testing and demonstration, this tool includes a command to generate synthetic market data that matches the required format:
+**Arguments:**
+- `strategy`: The name of the strategy to run (e.g., `value_play`).
 
 ```bash
-generate_example_data <strategy> [output_path] [OPTIONS]
+# Help
+backtest run --help
 
-# For the Dividend Growth Investing (DGI) strategy
-generate_example_data dgi data/dgi.demo_content.csv
+# Basic usage with a specific strategy (dgi) and data file
+backtest run dgi --input data/market_data.csv
+
+# Specify custom parameters
+backtest run exp_fund --input data/market_data.csv --start-year 2015 --end-year 2023 --growth-threshold 0.15 --top-n 15 --hybrid-weighting
+
+# Backtest with risk management features
+backtest run dgi --input data/market_data.csv --risk-overlay --ps-threshold 8.5 --dynamic-rebalance
+
+# Backtest a stress test scenario
+backtest run exp_fund --input data/market_data.csv --stress-test 2008crisis
+
+# Use different rebalancing frequency
+backtest run exp_fund --input data/market_data.csv --rebalance-frequency quarterly
+
+# Include transaction costs and delisted companies
+backtest run dgi --input data/market_data.csv --transaction-cost 0.005 --include-delisted
+
+# Save detailed results to a JSON file
+backtest run value_play --input data/market_data.csv --output results.json
+
+# Save results to a CSV file
+backtest run value_play --input data/market_data.csv --output results.csv
 ```
 
-This command creates a CSV file with the specified strategy's data for simulated companies (labeled STOCK01-STOCK50).
 
-E.g. `generate_example_data exp_fund` creates a file at `data/exp_fund.example_data.01.csv` with the following characteristics:
-- Years: 2015–2023 (default)
-- 50 simulated companies (labeled STOCK01-STOCK50)
-- Realistic market cap values with proper ranking
-- Growth rates between 10-40%
-- P/S ratios that correlate with company size
-- Annual returns that correlate with growth rates
+### <a name="market-data"></a>`data <strategy_template_name>`
+Fetches or generates market data suitable for the backtesting tool. It is the primary way to create the input data files used by `backtest run`.
 
-Once generated, you can immediately use this data file with the backtest tool, see the _[Usage](#usage)_.
+```bash
+backtest data <strategy> --output <OUTPUT_FILE_PATH> [OPTIONS]
+```
 
+**Examples for `backtest data`:**
+
+```bash
+# Help
+backtest data --help
+
+# For the Dividend Growth Investing (DGI) strategy
+backtest data dgi --output data/dgi.demo_content.csv
+```
+
+See [./data_provider/README.md](./data_provider/README.md#usage) for more.
 
 ## Metrics
 
